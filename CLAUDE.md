@@ -14,10 +14,14 @@
 ```
 calcul/
 ├── calc.html            ← ★앱 본체 (단일 HTML, 바닐라 JS, 외부 CDN 없음 → 오프라인 동작)
-├── 계산노트 실행.bat      ← 윈도우 실행기 (ASCII 전용·CRLF 유지 — 한글 넣으면 인코딩 깨짐)
+├── server.ps1           ← 기록 도우미: localhost 서버로 calc.html을 열고 기록을 파일로 저장 (UTF-8 BOM 유지)
+├── 계산노트 실행.bat      ← 윈도우 실행기: server.ps1을 숨김 실행 (ASCII 전용·CRLF 유지 — 한글 넣으면 인코딩 깨짐)
 ├── README.md            ← 설치·사용법
-└── CLAUDE.md            ← 이 파일
+├── CLAUDE.md            ← 이 파일
+└── 계산노트기록.json      ← 사용자 계산 기록 (실행 시 생성, .gitignore — 커밋 금지)
 ```
+
+- 저장 구조: bat 실행 → server.ps1이 48750~48759 중 빈 포트에 HttpListener를 열고 크롬/엣지 `--app` 창을 띄움 → 앱이 `/load`로 기록파일을 읽고, 저장 때마다 `/save`(0.4초 디바운스)로 `계산노트기록.json`에 기록(직전본 1개 보관). 앱은 10초마다 `/ping`, 120초 무응답이면 도우미 자동 종료. `calc.html`을 직접 열면(file://) localStorage로만 동작하는 폴백.
 
 - `calc.html` 내부 구조: `<script id="calc-engine">`(계산 엔진, DOM 미사용 — node로 단독 테스트 가능) + `<script id="calc-app">`(화면·저장).
 - 엔진 핵심: `parseKoreanNumber`(70억·3500만·% 파싱), `evalFormula`(사칙연산 재귀하강 파서), `computeAll`(순환참조 감지), `shiftFormulaRefs`(복붙 상대참조 이동).
@@ -36,8 +40,10 @@ calcul/
 |---|---|---|
 | localStorage `calcnote_v1` | 개명·구조 변경 시 기록 소실 | 구조 바꿀 땐 마이그레이션 코드 필수 |
 | `계산노트 실행.bat` | 한글/UTF-8 저장 시 cmd 인코딩 깨짐 | ASCII 전용·CRLF 유지 |
-| file:// 실행 | 서비스워커·fetch 불가 | PWA·외부요청 코드 넣지 말 것 |
-| 브라우저 데이터 삭제 | 기록 소실 | 💾 백업/복원 기능 유지 (제거 금지) |
+| file:// 실행 | 서비스워커·fetch 불가 | PWA·외부요청 코드 넣지 말 것 (localhost 도우미 호출만 예외) |
+| 브라우저 데이터 삭제 | localStorage 소실 | 기록파일(계산노트기록.json)이 원본 — 파일저장 로직·💾 백업/복원 제거 금지 |
+| server.ps1 인코딩 | BOM 없으면 PowerShell 5.1이 한글 주석·파일명 깨뜨림 | UTF-8 **BOM** + CRLF 유지 |
+| 계산노트기록.json | 개인 데이터 | .gitignore 유지 — 절대 커밋 금지 |
 | `computeAll`의 텍스트 셀 throw | 메모 셀은 정상 입력인데 오류로 오인 가능 | 메모는 콘솔 로그 제외 처리돼 있음 — 유지 |
 
 ## 5. 이력
