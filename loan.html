@@ -195,6 +195,21 @@ function parseKoreanNumber(str) {
   return neg ? -v : v;
 }
 
+// 이자율(%) 입력 파싱: "4.5" 또는 "4.5%" → 4.5 (그대로 퍼센트 값). 숫자 아니면 null.
+// parseKoreanNumber와 달리 %를 100으로 나누지 않는다 (이자칸은 이미 % 단위 입력).
+function parseRate(s) {
+  if (s == null) return null;
+  const t = String(s).trim().replace(/%$/, '').replace(/,/g, '');
+  if (t === '') return null;
+  const v = Number(t);
+  return isFinite(v) ? v : null;
+}
+// 금리 표시: 부동소수점 오차 제거 (최대 6자리 반올림, 뒤 0 정리)
+function fmtRate(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '-';
+  return (Math.round(v * 1e6) / 1e6) + '%';
+}
+
 // ── 날짜 유틸 (YYYY-MM-DD 문자열 기반) ──
 function parseISO(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); }
 function ymd(dt) {
@@ -358,7 +373,7 @@ function koreanUnits(v) {
 
 // node 단독 테스트용 export
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseKoreanNumber, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
+  module.exports = { parseKoreanNumber, parseRate, fmtRate, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
 }
 </script>
 
@@ -437,12 +452,12 @@ if (typeof module !== 'undefined' && module.exports) {
       principal: parseKoreanNumber(l.principal),
       startDate: l.startDate,
       termMonths: parseKoreanNumber(l.termMonths),
-      baseRate: parseKoreanNumber(l.baseRate),
+      baseRate: parseRate(l.baseRate),
       method: l.method,
       graceMonths: parseKoreanNumber(l.graceMonths) || 0,
-      rateChanges: (l.rateChanges || []).map(c => ({ date: c.date, rate: parseKoreanNumber(c.rate) })),
+      rateChanges: (l.rateChanges || []).map(c => ({ date: c.date, rate: parseRate(c.rate) })),
       asOfDate: l.asOfDate,
-      prepayFeeRate: parseKoreanNumber(l.prepayFeeRate) || 0,
+      prepayFeeRate: parseRate(l.prepayFeeRate) || 0,
       prepayFeeMonths: parseKoreanNumber(l.prepayFeeMonths) || 0,
     };
   }
@@ -584,7 +599,7 @@ if (typeof module !== 'undefined' && module.exports) {
       '<div class="subhead">📅 현재시점 대출잔액 <span style="font-weight:400;color:#64748b">(기준일 ' + (l.asOfDate || todayISO()) + ' · ' + asOf.paidCount + '회차 납입 완료)</span></div>' +
       '<div class="breakdown">' +
         bd('원금 (남은 대출원금)', won(asOf.remainingPrincipal)) +
-        bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + asOf.appliedRate + '%') +
+        bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + fmtRate(asOf.appliedRate)) +
       '</div>' +
 
       '<div class="subhead" style="margin-top:14px">💰 지금 중도상환 시 갚을 금액</div>' +
@@ -614,7 +629,7 @@ if (typeof module !== 'undefined' && module.exports) {
   function kUnit(v) { const s = koreanUnits(v); return s ? '약 ' + s : ''; }
   function feeNote(o) {
     if (!(o.prepayFeeRate > 0 && o.prepayFeeMonths > 0)) return '수수료율/부과기간 미입력 시 0';
-    return '잔여원금 × ' + o.prepayFeeRate + '% × 잔여/' + Math.round(o.prepayFeeMonths) + '개월(슬라이딩)';
+    return '잔여원금 × ' + fmtRate(o.prepayFeeRate) + ' × 잔여/' + Math.round(o.prepayFeeMonths) + '개월(슬라이딩)';
   }
 
   function renderSchedule(sched, asOfISO) {
