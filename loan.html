@@ -195,6 +195,21 @@ function parseKoreanNumber(str) {
   return neg ? -v : v;
 }
 
+// 이자율(%) 입력 파싱: "4.5" 또는 "4.5%" → 4.5 (그대로 퍼센트 값). 숫자 아니면 null.
+// parseKoreanNumber와 달리 %를 100으로 나누지 않는다 (이자칸은 이미 % 단위 입력).
+function parseRate(s) {
+  if (s == null) return null;
+  const t = String(s).trim().replace(/%$/, '').replace(/,/g, '');
+  if (t === '') return null;
+  const v = Number(t);
+  return isFinite(v) ? v : null;
+}
+// 금리 표시: 부동소수점 오차 제거 (최대 6자리 반올림, 뒤 0 정리)
+function fmtRate(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '-';
+  return (Math.round(v * 1e6) / 1e6) + '%';
+}
+
 // ── 날짜 유틸 (YYYY-MM-DD 문자열 기반) ──
 function parseISO(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); }
 function ymd(dt) {
@@ -358,7 +373,7 @@ function koreanUnits(v) {
 
 // node 단독 테스트용 export
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseKoreanNumber, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
+  module.exports = { parseKoreanNumber, parseRate, fmtRate, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
 }
 </script>
 
@@ -437,12 +452,12 @@ if (typeof module !== 'undefined' && module.exports) {
       principal: parseKoreanNumber(l.principal),
       startDate: l.startDate,
       termMonths: parseKoreanNumber(l.termMonths),
-      baseRate: parseKoreanNumber(l.baseRate),
+      baseRate: parseRate(l.baseRate),
       method: l.method,
       graceMonths: parseKoreanNumber(l.graceMonths) || 0,
-      rateChanges: (l.rateChanges || []).map(c => ({ date: c.date, rate: parseKoreanNumber(c.rate) })),
+      rateChanges: (l.rateChanges || []).map(c => ({ date: c.date, rate: parseRate(c.rate) })),
       asOfDate: l.asOfDate,
-      prepayFeeRate: parseKoreanNumber(l.prepayFeeRate) || 0,
+      prepayFeeRate: parseRate(l.prepayFeeRate) || 0,
       prepayFeeMonths: parseKoreanNumber(l.prepayFeeMonths) || 0,
     };
   }
@@ -459,6 +474,26 @@ if (typeof module !== 'undefined' && module.exports) {
     bindInputs(l);
     renderRateTable(l);
     recompute();
+  }
+
+  // 빌린원금 입력칸: 숫자만 넣으면 천단위 콤마 자동 (억/만/% 등 한글단위는 그대로 둠)
+  function commafy(el) {
+    const v = el.value;
+    if (/[억만조%\s]/.test(v)) return;               // 한글단위 입력이면 자동 콤마 미적용
+    const digits = v.replace(/,/g, '');
+    if (digits === '' || !/^\d*\.?\d*$/.test(digits)) return;
+    const caretDigits = v.slice(0, el.selectionStart == null ? v.length : el.selectionStart)
+      .replace(/,/g, '').length;                     // 커서 앞 숫자 개수
+    const [ip, fp] = digits.split('.');
+    const formatted = (ip ? Number(ip).toLocaleString('en-US') : '') + (fp !== undefined ? '.' + fp : '');
+    if (formatted === v) return;
+    el.value = formatted;
+    let count = 0, pos = 0;                           // 커서 위치 복원
+    for (; pos < formatted.length; pos++) {
+      if (/\d/.test(formatted[pos])) count++;
+      if (count >= caretDigits) { pos++; break; }
+    }
+    try { el.setSelectionRange(pos, pos); } catch (e) {}
   }
 
   function bindInputs(l) {
@@ -486,9 +521,11 @@ if (typeof module !== 'undefined' && module.exports) {
     map.forEach(([id, key]) => {
       const el = $(id);
       el.value = l[key] != null ? l[key] : '';
+      if (key === 'principal') commafy(el);      // 초기값도 콤마 표시
       el.addEventListener('input', () => {
+        if (key === 'principal') commafy(el);     // 입력 즉시 천단위 콤마
         l[key] = el.value; saveStore(); recompute();
-        if (key === 'principal') renderList();   // 왼쪽 목록 요약 갱신
+        if (key === 'principal') renderList();     // 왼쪽 목록 요약 갱신
       });
     });
   }
@@ -562,7 +599,7 @@ if (typeof module !== 'undefined' && module.exports) {
       '<div class="subhead">📅 현재시점 대출잔액 <span style="font-weight:400;color:#64748b">(기준일 ' + (l.asOfDate || todayISO()) + ' · ' + asOf.paidCount + '회차 납입 완료)</span></div>' +
       '<div class="breakdown">' +
         bd('원금 (남은 대출원금)', won(asOf.remainingPrincipal)) +
-        bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + asOf.appliedRate + '%') +
+        bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + fmtRate(asOf.appliedRate)) +
       '</div>' +
 
       '<div class="subhead" style="margin-top:14px">💰 지금 중도상환 시 갚을 금액</div>' +
@@ -592,7 +629,7 @@ if (typeof module !== 'undefined' && module.exports) {
   function kUnit(v) { const s = koreanUnits(v); return s ? '약 ' + s : ''; }
   function feeNote(o) {
     if (!(o.prepayFeeRate > 0 && o.prepayFeeMonths > 0)) return '수수료율/부과기간 미입력 시 0';
-    return '잔여원금 × ' + o.prepayFeeRate + '% × 잔여/' + Math.round(o.prepayFeeMonths) + '개월(슬라이딩)';
+    return '잔여원금 × ' + fmtRate(o.prepayFeeRate) + ' × 잔여/' + Math.round(o.prepayFeeMonths) + '개월(슬라이딩)';
   }
 
   function renderSchedule(sched, asOfISO) {
@@ -652,6 +689,21 @@ if (typeof module !== 'undefined' && module.exports) {
     if (t.id === 'btnBackup') doBackup();
     if (t.id === 'btnRestore') $('restoreFile').click();
     if (t.id === 'btnTodayAsOf') { const l = active(); l.asOfDate = todayISO(); saveStore(); renderAll(); }
+    if (t.id === 'btnCalc') {
+      recompute();
+      const o = toOpts(active());
+      if (!ready(o)) {
+        const miss = [];
+        if (!(o.principal > 0)) miss.push('빌린원금');
+        if (!(o.termMonths > 0)) miss.push('만기(대출기간)');
+        if (o.baseRate == null) miss.push('이자(연이자율)');
+        if (!o.startDate) miss.push('대출개시일');
+        alert('먼저 입력해 주세요: ' + miss.join(', '));
+        return;
+      }
+      const card = document.querySelector('.card.result');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   });
   document.addEventListener('change', e => {
     if (e.target.id === 'restoreFile') doRestore(e.target.files[0]);
@@ -760,6 +812,8 @@ if (typeof module !== 'undefined' && module.exports) {
             <input type="text" id="fFeeMonths" placeholder="36" inputmode="numeric">
           </div>
         </div>
+        <button class="btn-new" id="btnCalc" style="margin-top:8px">🧮 계산하기</button>
+        <div style="font-size:11px;color:#94a3b8;text-align:center;margin-top:6px">입력하면 자동 계산돼요 · 버튼은 결과로 이동합니다</div>
       </div>
 
       <div class="card result">
