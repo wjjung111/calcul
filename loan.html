@@ -231,6 +231,18 @@ function addMonths(iso, n) {
   return ny + '-' + String(nm + 1).padStart(2, '0') + '-' + String(nd).padStart(2, '0');
 }
 function daysBetween(a, b) { return Math.round((parseISO(b) - parseISO(a)) / 86400000); }
+// 해당 월의 특정 '일'로 맞춤 (말일 보정: 2월15일 OK, 30일 지정 시 2월은 28/29일)
+function setDayOfMonth(iso, day) {
+  const [y, m] = String(iso).split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  const d = Math.min(Math.max(1, day), last);
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+// i회차 상환일: 상환일(payDay) 지정 시 매월 그 날짜, 없으면 개시일과 같은 날
+function payDateOf(start, i, payDay) {
+  const base = addMonths(start, i);
+  return payDay ? setDayOfMonth(base, payDay) : base;
+}
 
 // 원리금균등 월상환액: 매기 이자율 r, 잔여기간 n, 잔액 pv
 function pmt(r, n, pv) {
@@ -275,8 +287,9 @@ function loanSchedule(opts) {
   let prevRate = null;
   const amortPeriods = Math.max(1, n - grace);
 
+  const payDay = Math.round(+opts.paymentDay) || 0;   // 매월 상환일(1~31), 0이면 개시일 기준
   for (let i = 1; i <= n; i++) {
-    const payDate = addMonths(start, i);
+    const payDate = payDateOf(start, i, payDay);
     const annual = rateAt(prevDate);          // 이 회차 기간 동안 적용 금리
     const mr = annual / 100 / 12;
     let interest = bal * mr;
@@ -307,7 +320,7 @@ function loanSchedule(opts) {
 
   const totalInterest = rows.reduce((s, r) => s + r.interest, 0);
   const totalPayment = rows.reduce((s, r) => s + r.payment, 0);
-  return { rows, totalInterest, totalPayment, maturityDate: addMonths(start, n) };
+  return { rows, totalInterest, totalPayment, maturityDate: payDateOf(start, n, payDay) };
 }
 
 /*
@@ -424,7 +437,7 @@ function loanPrepay(sched, opts, asOf, prepayAmount) {
     for (let i = k + 1; i <= hardCap; i++) {
       if (bal <= 0.5) break;
       if (mode === 'pay' && i > n) break;                     // 감소모드는 기간 고정
-      const payDate = addMonths(start, i);
+      const payDate = payDateOf(start, i, Math.round(+opts.paymentDay) || 0);
       const annual = rateAt(prevDate);
       const mr = annual / 100 / 12;
       const interest = bal * mr;
@@ -528,6 +541,7 @@ if (typeof module !== 'undefined' && module.exports) {
       baseRate: '',
       graceMonths: '',
       rateChanges: [],          // [{date, rate}]
+      paymentDay: '',           // 매월 상환일(1~31, 비우면 개시일 기준)
       asOfDate: todayISO(),
       prepayAmount: '',         // 일부 상환금액 (비우면 전액상환)
       prepayFeeRate: '',
@@ -572,6 +586,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return {
       principal: parseKoreanNumber(l.principal),
       startDate: l.startDate,
+      paymentDay: parseKoreanNumber(l.paymentDay) || 0,
       termMonths: parseKoreanNumber(l.termMonths),
       baseRate: parseRate(l.baseRate),
       method: l.method,
@@ -636,7 +651,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // 텍스트/날짜 입력들
     const map = [
       ['fPrincipal', 'principal'], ['fStart', 'startDate'], ['fTerm', 'termMonths'],
-      ['fRate', 'baseRate'], ['fGrace', 'graceMonths'], ['fAsOf', 'asOfDate'],
+      ['fRate', 'baseRate'], ['fGrace', 'graceMonths'], ['fPayDay', 'paymentDay'], ['fAsOf', 'asOfDate'],
       ['fPrepayAmount', 'prepayAmount'], ['fFeeRate', 'prepayFeeRate'], ['fFeeMonths', 'prepayFeeMonths'],
     ];
     const moneyKeys = ['principal', 'prepayAmount'];
@@ -947,6 +962,10 @@ if (typeof module !== 'undefined' && module.exports) {
             <label>만기 <span class="hint">(대출기간·개월)</span></label>
             <input type="text" id="fTerm" placeholder="360" inputmode="numeric">
           </div>
+        </div>
+        <div class="field">
+          <label>매월 상환일 <span class="hint">(며칠에 내는지, 예: 15 · 비우면 개시일 기준)</span></label>
+          <input type="text" id="fPayDay" placeholder="예: 15" inputmode="numeric">
         </div>
         <div class="row2">
           <div class="field">
