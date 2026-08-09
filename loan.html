@@ -155,6 +155,11 @@
   }
   table.sched tfoot td { font-weight: 700; background: #f1f5f9; border-top: 2px solid #cbd5e1; }
   .grace-badge { display:inline-block; font-size:10px; color:#7c3aed; background:#f3e8ff; border-radius:5px; padding:1px 5px; margin-left:4px; }
+  /* 누적합계 열: 기본 숨김 → 버튼으로 표시 */
+  table.sched .cum { display: none; }
+  table.sched.show-cum .cum { display: table-cell; }
+  table.sched th.cum { color: #1d4ed8; background: #eff6ff; }
+  table.sched td.cum { color: #1d4ed8; background: #f8faff; font-weight: 600; }
 
   .empty { color: #94a3b8; text-align: center; padding: 60px 20px; }
 </style>
@@ -353,6 +358,121 @@ function loanAsOf(sched, opts, asOf) {
   };
 }
 
+// 금리 적용 시점 배열 + 조회 함수 (loanSchedule과 동일 규칙)
+function ratePoints(opts) {
+  const points = [{ date: opts.startDate, rate: +opts.baseRate }]
+    .concat((opts.rateChanges || [])
+      .filter(c => c && c.date && c.rate !== '' && c.rate != null && isFinite(+c.rate))
+      .map(c => ({ date: c.date, rate: +c.rate })))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return function rateAt(dateStr) {
+    let r = points[0].rate;
+    for (const p of points) { if (p.date <= dateStr) r = p.rate; else break; }
+    return r;
+  };
+}
+
+/*
+ * 일부(부분) 중도상환 계산.
+ *   기준일(asOf)에 원금 일부(prepayAmount)를 갚았을 때:
+ *   - immediate : 지금 낼 금액 = 상환원금 + 중도상환수수료(상환분)
+ *   - newBalance: 상환 후 남는 원금
+ *   - termMode  : 기간단축(월상환액 유지) → 절약이자, 새 만기일, 단축 개월수
+ *   - payMode   : 월상환액 감소(기간 유지) → 절약이자, 새 월상환액
+ *   prepayAmount가 잔여원금 이상이면 isFull=true (전액상환).
+ */
+function loanPrepay(sched, opts, asOf, prepayAmount) {
+  const rows = sched.rows;
+  let k = 0;
+  for (const r of rows) { if (r.date <= asOf) k = r.no; else break; }
+  const RP = k === 0 ? +opts.principal : rows[k - 1].endBal;
+  const A = Math.min(Math.max(0, +prepayAmount || 0), RP);
+  const newBal = RP - A;
+
+  // 중도상환수수료 (상환하는 원금분에 대해 슬라이딩)
+  let fee = 0;
+  const feeRate = +opts.prepayFeeRate || 0;
+  const feeMonths = Math.round(+opts.prepayFeeMonths || 0);
+  if (feeRate > 0 && feeMonths > 0) {
+    const feeEnd = addMonths(opts.startDate, feeMonths);
+    if (asOf < feeEnd) {
+      const totalDays = daysBetween(opts.startDate, feeEnd);
+      const remDays = Math.max(0, daysBetween(asOf, feeEnd));
+      fee = A * (feeRate / 100) * (totalDays > 0 ? remDays / totalDays : 0);
+    }
+  }
+
+  // 원래 앞으로 낼 예정이던 이자 (k+1..n)
+  let oldRemInt = 0;
+  for (let i = k; i < rows.length; i++) oldRemInt += rows[i].interest;
+
+  const rateAt = ratePoints(opts);
+  const method = opts.method === 'equalPrincipal' ? 'equalPrincipal' : 'equalPayment';
+  const n = Math.round(+opts.termMonths);
+  const grace = Math.max(0, Math.round(+opts.graceMonths || 0));
+  const amortPeriods = Math.max(1, n - grace);
+  const fixedPrincipal = (+opts.principal) / amortPeriods;   // 원금균등 매기 원금
+  const start = opts.startDate;
+  const remPeriods = n - k;                                   // 상환 후에도 남는 정규 회차수
+
+  // 기준일 이후를 잔액 b0로 시뮬레이션 → 총이자·회차수 계산
+  function sim(b0, mode) {                                    // mode: 'term' | 'pay'
+    let bal = b0, totalInt = 0, periods = 0;
+    let prevDate = (k === 0 ? start : rows[k - 1].date), lastDate = prevDate;
+    let curPay = null, prevRate = null, newPayment = null;
+    const hardCap = n + 2400;                                 // 무한루프 방지
+    for (let i = k + 1; i <= hardCap; i++) {
+      if (bal <= 0.5) break;
+      if (mode === 'pay' && i > n) break;                     // 감소모드는 기간 고정
+      const payDate = addMonths(start, i);
+      const annual = rateAt(prevDate);
+      const mr = annual / 100 / 12;
+      const interest = bal * mr;
+      let principalPortion, payment;
+      if (method === 'equalPrincipal') {
+        principalPortion = (mode === 'pay') ? (b0 / remPeriods) : fixedPrincipal;
+        payment = principalPortion + interest;
+      } else {
+        if (mode === 'pay') {
+          const remaining = n - (i - 1);
+          if (curPay === null || annual !== prevRate) curPay = pmt(mr, remaining, bal);
+          newPayment = curPay;
+          principalPortion = curPay - interest;
+          payment = curPay;
+        } else {                                             // 기간단축: 월상환액 유지
+          const M = rows[k] ? rows[k].payment : pmt(mr, n - k, b0);
+          principalPortion = M - interest;
+          payment = M;
+        }
+      }
+      if (principalPortion <= 0) { principalPortion = bal; } // 이자>납입액이면 바로 종료 방지
+      if (principalPortion >= bal) { principalPortion = bal; payment = principalPortion + interest; }
+      bal -= principalPortion;
+      if (Math.abs(bal) < 0.5) bal = 0;
+      totalInt += interest; periods++; lastDate = payDate;
+      prevDate = payDate; prevRate = annual;
+    }
+    return { totalInt, periods, lastDate, newPayment };
+  }
+
+  const term = sim(newBal, 'term');
+  const pay = sim(newBal, 'pay');
+  return {
+    paidCount: k, remainingPrincipal: RP, prepayAmount: A, newBalance: newBal, isFull: A >= RP - 0.5,
+    fee, immediate: A + fee, oldRemainingInterest: oldRemInt, originalMaturity: sched.maturityDate,
+    termMode: {
+      savedInterest: Math.max(0, oldRemInt - term.totalInt),
+      newMaturity: term.lastDate, newPeriods: term.periods,
+      monthsShortened: Math.max(0, remPeriods - term.periods),
+      monthlyPayment: rows[k] ? rows[k].payment : null
+    },
+    payMode: {
+      savedInterest: Math.max(0, oldRemInt - pay.totalInt),
+      newMonthlyPayment: pay.newPayment, periods: pay.periods
+    }
+  };
+}
+
 // 원(₩) 반올림 표시
 function won(v) {
   if (typeof v !== 'number' || !isFinite(v)) return '-';
@@ -373,7 +493,7 @@ function koreanUnits(v) {
 
 // node 단독 테스트용 export
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseKoreanNumber, parseRate, fmtRate, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
+  module.exports = { parseKoreanNumber, parseRate, fmtRate, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, loanPrepay, won, koreanUnits, ymd };
 }
 </script>
 
@@ -409,6 +529,7 @@ if (typeof module !== 'undefined' && module.exports) {
       graceMonths: '',
       rateChanges: [],          // [{date, rate}]
       asOfDate: todayISO(),
+      prepayAmount: '',         // 일부 상환금액 (비우면 전액상환)
       prepayFeeRate: '',
       prepayFeeMonths: '',
     };
@@ -516,16 +637,17 @@ if (typeof module !== 'undefined' && module.exports) {
     const map = [
       ['fPrincipal', 'principal'], ['fStart', 'startDate'], ['fTerm', 'termMonths'],
       ['fRate', 'baseRate'], ['fGrace', 'graceMonths'], ['fAsOf', 'asOfDate'],
-      ['fFeeRate', 'prepayFeeRate'], ['fFeeMonths', 'prepayFeeMonths'],
+      ['fPrepayAmount', 'prepayAmount'], ['fFeeRate', 'prepayFeeRate'], ['fFeeMonths', 'prepayFeeMonths'],
     ];
+    const moneyKeys = ['principal', 'prepayAmount'];
     map.forEach(([id, key]) => {
       const el = $(id);
       el.value = l[key] != null ? l[key] : '';
-      if (key === 'principal') commafy(el);      // 초기값도 콤마 표시
+      if (moneyKeys.includes(key)) commafy(el);      // 초기값도 콤마 표시
       el.addEventListener('input', () => {
-        if (key === 'principal') commafy(el);     // 입력 즉시 천단위 콤마
+        if (moneyKeys.includes(key)) commafy(el);     // 입력 즉시 천단위 콤마
         l[key] = el.value; saveStore(); recompute();
-        if (key === 'principal') renderList();     // 왼쪽 목록 요약 갱신
+        if (key === 'principal') renderList();         // 왼쪽 목록 요약 갱신
       });
     });
   }
@@ -602,19 +724,58 @@ if (typeof module !== 'undefined' && module.exports) {
         bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + fmtRate(asOf.appliedRate)) +
       '</div>' +
 
-      '<div class="subhead" style="margin-top:14px">💰 지금 중도상환 시 갚을 금액</div>' +
-      '<div class="breakdown">' +
-        bd('원금', won(asOf.remainingPrincipal)) +
-        bd('이자 (경과이자)', won(asOf.accruedInterest)) +
-        bd('중도상환수수료', won(asOf.fee), feeNote(o)) +
-        bd('합계 (상환금액)', won(asOf.payoff), '', 'total') +
-      '</div>' +
-      '<div class="summary" style="margin-top:12px">' +
-        stat('지금 중도상환 시 절약하는 이자', won(asOf.savedInterest), '앞으로 낼 예정이던 이자에서 오늘 낼 경과이자를 뺀 금액 · ' + kUnit(asOf.savedInterest), 'green') +
-      '</div>';
+      prepaySection(sched, o, asOf, l);
 
     // 스케줄표
     renderSchedule(sched, l.asOfDate || todayISO());
+  }
+
+  // 중도상환 결과: 일부 상환금액이 입력되면 부분상환, 아니면 전액상환
+  function prepaySection(sched, o, asOf, l) {
+    const amt = parseKoreanNumber(l.prepayAmount);
+    const partial = amt != null && amt > 0 && amt < asOf.remainingPrincipal - 0.5;
+
+    if (!partial) {
+      // ── 전액(전부) 중도상환 ──
+      return '<div class="subhead" style="margin-top:14px">💰 지금 <b>전액</b> 중도상환 시 갚을 금액 ' +
+          '<span style="font-weight:400;color:#64748b">(일부만 갚으려면 아래 “일부 상환금액”에 금액 입력)</span></div>' +
+        '<div class="breakdown">' +
+          bd('원금', won(asOf.remainingPrincipal)) +
+          bd('이자 (경과이자)', won(asOf.accruedInterest)) +
+          bd('중도상환수수료', won(asOf.fee), feeNote(o)) +
+          bd('합계 (상환금액)', won(asOf.payoff), '', 'total') +
+        '</div>' +
+        '<div class="summary" style="margin-top:12px">' +
+          stat('지금 전액상환 시 절약하는 이자', won(asOf.savedInterest), '앞으로 낼 예정이던 이자에서 오늘 낼 경과이자를 뺀 금액 · ' + kUnit(asOf.savedInterest), 'green') +
+        '</div>';
+    }
+
+    // ── 일부(부분) 중도상환 ──
+    const pp = loanPrepay(sched, o, l.asOfDate || todayISO(), amt);
+    const tm = pp.termMode, pm = pp.payMode;
+    return '<div class="subhead" style="margin-top:14px">💰 <b>일부</b> 중도상환 (' + won(pp.prepayAmount) + ' 상환)</div>' +
+      '<div class="breakdown">' +
+        bd('지금 낼 금액', won(pp.immediate), '상환원금 + 중도상환수수료', 'total') +
+        bd('└ 상환원금', won(pp.prepayAmount)) +
+        bd('└ 중도상환수수료', won(pp.fee), feeNote(o)) +
+        bd('상환 후 남는 원금', won(pp.newBalance), '기존 ' + won(pp.remainingPrincipal)) +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748b;margin:10px 0 6px">남은 원금을 어떻게 처리하느냐에 따라 두 가지:</div>' +
+      '<div class="breakdown">' +
+        '<div class="b" style="border-color:#bbf7d0;background:#f0fdf4">' +
+          '<div class="k" style="color:#15803d;font-weight:700">① 기간단축 <span style="font-weight:400">(월상환액 그대로)</span></div>' +
+          '<div class="v" style="color:#15803d;margin-top:5px">이자 ' + won(tm.savedInterest) + ' 절약</div>' +
+          '<div class="k" style="margin-top:4px">새 만기 ' + tm.newMaturity + ' · <b>' + tm.monthsShortened + '개월 단축</b>' +
+            (tm.monthlyPayment ? '<br>월상환액 ' + won(tm.monthlyPayment) + ' 유지' : '') + '</div>' +
+        '</div>' +
+        '<div class="b" style="border-color:#bfdbfe;background:#eff6ff">' +
+          '<div class="k" style="color:#1d4ed8;font-weight:700">② 월상환액 감소 <span style="font-weight:400">(기간 그대로)</span></div>' +
+          '<div class="v" style="color:#1d4ed8;margin-top:5px">이자 ' + won(pm.savedInterest) + ' 절약</div>' +
+          '<div class="k" style="margin-top:4px">' + (pm.newMonthlyPayment != null ? '새 월상환액 <b>' + won(pm.newMonthlyPayment) + '</b>' : '월 납입원금 감소') +
+            '<br>기간 ' + pm.periods + '회 그대로' + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:11px;color:#94a3b8;margin-top:8px">※ 경과이자(' + won(asOf.accruedInterest) + ')는 보통 다음 정기 납입일에 반영돼요. 은행별로 방식이 다를 수 있습니다.</div>';
   }
 
   function stat(k, v, note, cls) {
@@ -639,18 +800,22 @@ if (typeof module !== 'undefined' && module.exports) {
     for (const r of sched.rows) { if (r.date <= asOfISO) paidCount = r.no; else break; }
     const currentNo = paidCount + 1;
 
+    let cumInt = 0, cumPrin = 0;
     body.innerHTML = sched.rows.map(r => {
+      cumInt += r.interest; cumPrin += r.principal;
       let cls = '';
       if (r.no <= paidCount) cls = 'paid';
       else if (r.no === currentNo) cls = 'asof';
       return '<tr class="' + cls + '">' +
         '<td>' + r.no + (r.grace ? '<span class="grace-badge">거치</span>' : '') + '</td>' +
         '<td>' + r.date + '</td>' +
-        '<td>' + r.annualRate + '%</td>' +
+        '<td>' + fmtRate(r.annualRate) + '</td>' +
         '<td>' + comma(r.payment) + '</td>' +
         '<td>' + comma(r.interest) + '</td>' +
         '<td>' + comma(r.principal) + '</td>' +
         '<td>' + comma(r.endBal) + '</td>' +
+        '<td class="cum">' + comma(cumInt) + '</td>' +
+        '<td class="cum">' + comma(cumPrin) + '</td>' +
         '</tr>';
     }).join('');
 
@@ -659,7 +824,10 @@ if (typeof module !== 'undefined' && module.exports) {
       '<td>' + comma(sched.totalPayment) + '</td>' +
       '<td>' + comma(sched.totalInterest) + '</td>' +
       '<td>' + comma(sched.rows.reduce((s, r) => s + r.principal, 0)) + '</td>' +
-      '<td>—</td></tr>';
+      '<td>—</td>' +
+      '<td class="cum">' + comma(sched.totalInterest) + '</td>' +
+      '<td class="cum">' + comma(sched.rows.reduce((s, r) => s + r.principal, 0)) + '</td>' +
+      '</tr>';
   }
 
   function comma(v) { return Math.round(v).toLocaleString('ko-KR'); }
@@ -673,6 +841,11 @@ if (typeof module !== 'undefined' && module.exports) {
       l.rateChanges = l.rateChanges || [];
       l.rateChanges.push({ date: '', rate: '' });
       saveStore(); renderRateTable(l);
+    }
+    if (t.id === 'btnCum') {
+      const tbl = $('schedTable');
+      const on = tbl.classList.toggle('show-cum');
+      t.textContent = on ? '➖ 누적합계 숨기기' : '➕ 누적합계 보기';
     }
     if (t.id === 'btnDup') {
       const l = active();
@@ -802,6 +975,10 @@ if (typeof module !== 'undefined' && module.exports) {
             <button class="tb-btn" id="btnTodayAsOf" style="white-space:nowrap">오늘</button>
           </div>
         </div>
+        <div class="field">
+          <label>일부 상환금액 <span class="hint">(비우면 전액상환 · 예: 500만, 5000000)</span></label>
+          <input type="text" id="fPrepayAmount" placeholder="비우면 전액상환" inputmode="numeric">
+        </div>
         <div class="row2">
           <div class="field">
             <label>중도상환수수료율 <span class="hint">(%)</span></label>
@@ -826,11 +1003,13 @@ if (typeof module !== 'undefined' && module.exports) {
       <div class="sched-tools">
         <h2>📋 상환 스케줄표</h2>
         <span style="font-size:12px;color:#94a3b8">회색=상환 완료 · 노랑=기준일 진행 중 회차</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="tb-btn" id="btnCum">➕ 누적합계 보기</button>
       </div>
       <div class="sched-scroll">
-        <table class="sched">
+        <table class="sched" id="schedTable">
           <thead>
-            <tr><th>회차</th><th>상환일</th><th>적용금리</th><th>상환액</th><th>납입이자</th><th>납입원금</th><th>잔액</th></tr>
+            <tr><th>회차</th><th>상환일</th><th>적용금리</th><th>상환액</th><th>납입이자</th><th>납입원금</th><th>잔액</th><th class="cum">누적이자</th><th class="cum">누적원금</th></tr>
           </thead>
           <tbody id="schedBody"></tbody>
           <tfoot id="schedFoot"></tfoot>
