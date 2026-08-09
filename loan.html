@@ -674,6 +674,21 @@ if (typeof module !== 'undefined' && module.exports) {
     if (t.id === 'btnBackup') doBackup();
     if (t.id === 'btnRestore') $('restoreFile').click();
     if (t.id === 'btnTodayAsOf') { const l = active(); l.asOfDate = todayISO(); saveStore(); renderAll(); }
+    if (t.id === 'btnCalc') {
+      recompute();
+      const o = toOpts(active());
+      if (!ready(o)) {
+        const miss = [];
+        if (!(o.principal > 0)) miss.push('빌린원금');
+        if (!(o.termMonths > 0)) miss.push('만기(대출기간)');
+        if (o.baseRate == null) miss.push('이자(연이자율)');
+        if (!o.startDate) miss.push('대출개시일');
+        alert('먼저 입력해 주세요: ' + miss.join(', '));
+        return;
+      }
+      const card = document.querySelector('.card.result');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   });
   document.addEventListener('change', e => {
     if (e.target.id === 'restoreFile') doRestore(e.target.files[0]);
@@ -782,6 +797,8 @@ if (typeof module !== 'undefined' && module.exports) {
             <input type="text" id="fFeeMonths" placeholder="36" inputmode="numeric">
           </div>
         </div>
+        <button class="btn-new" id="btnCalc" style="margin-top:8px">🧮 계산하기</button>
+        <div style="font-size:11px;color:#94a3b8;text-align:center;margin-top:6px">입력하면 자동 계산돼요 · 버튼은 결과로 이동합니다</div>
       </div>
 
       <div class="card result">
