@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<!--
+  대출 계산기 — 원리금균등·원금균등 상환 (계산 노트 부속, 윈도우 독립 실행)
+  Copyright (c) 2026 정우진 감정평가사 (Woojin Jung, Certified Appraiser / wjjung9334@gmail.com). All Rights Reserved. 모든 권리 보유.
+  무단 복제·수정·상업적 이용·재배포 금지. 상세: 저장소 LICENSE 파일 참조.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>대출 계산기</title>
+<meta name="theme-color" content="#0f172a">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+    background: #f1f5f9; color: #1e293b; display: flex; flex-direction: column;
+  }
+  header {
+    background: #0f172a; color: #f8fafc; padding: 10px 16px;
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  }
+  header .logo { font-weight: 700; letter-spacing: 1px; font-size: 15px; }
+  header a.back {
+    color: #cbd5e1; text-decoration: none; font-size: 13px; border: 1px solid #334155;
+    padding: 4px 10px; border-radius: 7px;
+  }
+  header a.back:hover { background: #1e293b; color: #fff; }
+  .layout { flex: 1; display: flex; min-height: 0; }
+
+  /* ── 왼쪽: 저장된 대출 목록 ── */
+  aside {
+    width: 210px; flex-shrink: 0; background: #fff; border-right: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  aside .side-head { padding: 10px; border-bottom: 1px solid #e2e8f0; }
+  .btn-new {
+    width: 100%; padding: 9px; border: none; border-radius: 8px; cursor: pointer;
+    background: #2563eb; color: #fff; font-weight: 700; font-size: 14px; font-family: inherit;
+  }
+  .btn-new:hover { background: #1d4ed8; }
+  .loan-list { overflow-y: auto; flex: 1; }
+  .loan-list .item {
+    padding: 10px 12px; border-bottom: 1px solid #f1f5f9; cursor: pointer; font-size: 13px;
+  }
+  .loan-list .item:hover { background: #f8fafc; }
+  .loan-list .item.active { background: #eff6ff; border-left: 3px solid #2563eb; }
+  .loan-list .item .nm { font-weight: 600; }
+  .loan-list .item .sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  main { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .toolbar input.name {
+    font-size: 15px; font-weight: 700; border: 1px solid transparent; background: transparent;
+    padding: 5px 8px; border-radius: 6px; font-family: inherit; width: 320px; max-width: 50%;
+  }
+  .toolbar input.name:hover { border-color: #cbd5e1; }
+  .toolbar input.name:focus { border-color: #2563eb; outline: none; background: #fff; }
+  .toolbar .spacer { flex: 1; }
+  .tb-btn {
+    border: 1px solid #cbd5e1; background: #fff; color: #334155; padding: 6px 11px;
+    border-radius: 7px; cursor: pointer; font-size: 13px; font-family: inherit;
+  }
+  .tb-btn:hover { background: #f1f5f9; }
+  .tb-btn.danger { color: #b91c1c; border-color: #fecaca; }
+  .tb-btn.danger:hover { background: #fef2f2; }
+
+  .cards { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .card h2 { font-size: 14px; color: #0f172a; margin-bottom: 12px; letter-spacing: .5px; }
+  .card.input { width: 380px; flex-shrink: 0; }
+  .card.result { flex: 1; min-width: 340px; }
+
+  .field { margin-bottom: 11px; }
+  .field label { display: block; font-size: 12px; color: #475569; margin-bottom: 4px; font-weight: 600; }
+  .field .hint { font-weight: 400; color: #94a3b8; }
+  .field input[type=text], .field input[type=date], .field input[type=number], .field select {
+    width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff; color: #1e293b;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px #dbeafe; }
+  .row2 { display: flex; gap: 10px; }
+  .row2 > .field { flex: 1; margin-bottom: 11px; }
+
+  .radio-group { display: flex; gap: 8px; }
+  .radio-group label {
+    flex: 1; display: block; text-align: center; padding: 9px 6px; border: 1px solid #cbd5e1;
+    border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: #475569; background: #fff;
+  }
+  .radio-group input { display: none; }
+  .radio-group input:checked + span { }
+  .radio-group label.on { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+
+  /* 금리 변동 미니표 */
+  .rate-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  .rate-table th, .rate-table td { padding: 4px; }
+  .rate-table input { width: 100%; padding: 6px 7px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: inherit; font-size: 13px; }
+  .rate-table .del { cursor: pointer; color: #b91c1c; border: none; background: none; font-size: 15px; padding: 0 4px; }
+  .btn-add-rate {
+    margin-top: 6px; border: 1px dashed #94a3b8; background: #f8fafc; color: #475569;
+    padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 12px; font-family: inherit; width: 100%;
+  }
+  .btn-add-rate:hover { background: #eff6ff; border-color: #2563eb; color: #1d4ed8; }
+
+  /* 결과 요약 */
+  .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 11px 13px;
+  }
+  .stat .k { font-size: 12px; color: #64748b; margin-bottom: 3px; }
+  .stat .v { font-size: 18px; font-weight: 700; color: #0f172a; }
+  .stat .v small { font-size: 12px; font-weight: 500; color: #64748b; }
+  .stat.wide { grid-column: 1 / -1; }
+  .stat.blue { background: #eff6ff; border-color: #bfdbfe; }
+  .stat.blue .v { color: #1d4ed8; }
+  .stat.amber { background: #fffbeb; border-color: #fde68a; }
+  .stat.amber .v { color: #b45309; }
+  .stat.green { background: #f0fdf4; border-color: #bbf7d0; }
+  .stat.green .v { color: #15803d; }
+
+  .subhead { font-size: 13px; font-weight: 700; color: #334155; margin: 6px 0 8px; }
+  .breakdown { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .breakdown .b {
+    flex: 1; min-width: 120px; background: #fff; border: 1px solid #e2e8f0; border-radius: 9px; padding: 9px 11px;
+  }
+  .breakdown .b .k { font-size: 11px; color: #64748b; }
+  .breakdown .b .v { font-size: 15px; font-weight: 700; margin-top: 2px; }
+  .breakdown .b.total { background: #0f172a; border-color: #0f172a; }
+  .breakdown .b.total .k { color: #cbd5e1; }
+  .breakdown .b.total .v { color: #fff; }
+
+  /* 스케줄표 */
+  .sched-wrap { margin-top: 16px; }
+  .sched-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .sched-tools h2 { font-size: 14px; color: #0f172a; }
+  .sched-scroll { max-height: 460px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; }
+  table.sched { border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }
+  table.sched th, table.sched td { padding: 7px 10px; text-align: right; border-bottom: 1px solid #f1f5f9; }
+  table.sched th {
+    position: sticky; top: 0; background: #f8fafc; color: #475569; font-weight: 600;
+    border-bottom: 1px solid #e2e8f0; text-align: right;
+  }
+  table.sched th:nth-child(1), table.sched td:nth-child(1),
+  table.sched th:nth-child(2), table.sched td:nth-child(2),
+  table.sched th:nth-child(3), table.sched td:nth-child(3) { text-align: center; }
+  table.sched tbody tr:hover { background: #f8fafc; }
+  table.sched tr.paid td { color: #94a3b8; background: #fafafa; }
+  table.sched tr.asof td {
+    background: #fef9c3; border-top: 2px solid #f59e0b; border-bottom: 2px solid #f59e0b;
+    color: #713f12; font-weight: 600;
+  }
+  table.sched tfoot td { font-weight: 700; background: #f1f5f9; border-top: 2px solid #cbd5e1; }
+  .grace-badge { display:inline-block; font-size:10px; color:#7c3aed; background:#f3e8ff; border-radius:5px; padding:1px 5px; margin-left:4px; }
+
+  .empty { color: #94a3b8; text-align: center; padding: 60px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🏦 대출 계산기</span>
+  <a class="back" href="calc.html">← 계산 노트</a>
+</header>
+<div class="layout">
+  <aside>
+    <div class="side-head">
+      <button class="btn-new" id="btnNew">＋ 새 대출</button>
+    </div>
+    <div class="loan-list" id="loanList"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<script id="loan-engine">
+'use strict';
+/* ───────── 대출 계산 엔진 (DOM 미사용 — node로 단독 테스트 가능) ───────── */
+
+// "3억", "5,000만", "1.5억", "1,234" → 숫자. 숫자 아니면 null
+function parseKoreanNumber(str) {
+  let s = String(str).trim().replace(/,/g, '').replace(/\s+/g, '');
+  if (!s) return null;
+  let neg = false;
+  if (s[0] === '-') { neg = true; s = s.slice(1); }
+  else if (s[0] === '+') s = s.slice(1);
+  let pct = false;
+  if (s.endsWith('%')) { pct = true; s = s.slice(0, -1); }
+  if (!s) return null;
+  const m = s.match(/^(?:(\d+(?:\.\d+)?)억)?(?:(\d+(?:\.\d+)?)만)?(\d+(?:\.\d+)?)?$/);
+  if (!m || (m[1] === undefined && m[2] === undefined && m[3] === undefined)) return null;
+  let v = (m[1] ? +m[1] * 1e8 : 0) + (m[2] ? +m[2] * 1e4 : 0) + (m[3] ? +m[3] : 0);
+  if (pct) v /= 100;
+  return neg ? -v : v;
+}
+
+// ── 날짜 유틸 (YYYY-MM-DD 문자열 기반) ──
+function parseISO(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); }
+function ymd(dt) {
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+// 개월 더하기 (말일 보정: 1/31 + 1개월 = 2/28)
+function addMonths(iso, n) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  const total = y * 12 + (m - 1) + n;
+  const ny = Math.floor(total / 12);
+  const nm = total - ny * 12;                 // 0~11
+  const lastDay = new Date(ny, nm + 1, 0).getDate();
+  const nd = Math.min(d, lastDay);
+  return ny + '-' + String(nm + 1).padStart(2, '0') + '-' + String(nd).padStart(2, '0');
+}
+function daysBetween(a, b) { return Math.round((parseISO(b) - parseISO(a)) / 86400000); }
+
+// 원리금균등 월상환액: 매기 이자율 r, 잔여기간 n, 잔액 pv
+function pmt(r, n, pv) {
+  if (n <= 0) return pv;
+  if (r === 0) return pv / n;
+  return pv * r / (1 - Math.pow(1 + r, -n));
+}
+
+/*
+ * 상환 스케줄 생성.
+ * opts = {
+ *   principal:빌린원금, startDate:'YYYY-MM-DD', termMonths:대출기간(개월),
+ *   baseRate:연이자율(%), method:'equalPayment'(원리금균등)|'equalPrincipal'(원금균등),
+ *   graceMonths:거치기간(개월, 이자만 납부), rateChanges:[{date:'적용일', rate:연이율%}]
+ * }
+ * 변동금리: 각 회차 기간의 시작일 기준으로 적용 금리를 찾는다.
+ *           원리금균등은 금리가 바뀌면 남은 잔액·기간으로 월상환액을 재산정(은행 방식).
+ */
+function loanSchedule(opts) {
+  const P = +opts.principal;
+  const n = Math.round(+opts.termMonths);
+  const grace = Math.max(0, Math.round(+opts.graceMonths || 0));
+  const start = opts.startDate;
+  const method = opts.method === 'equalPrincipal' ? 'equalPrincipal' : 'equalPayment';
+
+  // 금리 적용 시점: 개시일=기준금리, 이후 변동분
+  const points = [{ date: start, rate: +opts.baseRate }]
+    .concat((opts.rateChanges || [])
+      .filter(c => c && c.date && c.rate !== '' && c.rate != null && isFinite(+c.rate))
+      .map(c => ({ date: c.date, rate: +c.rate })))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  function rateAt(dateStr) {
+    let r = points[0].rate;
+    for (const p of points) { if (p.date <= dateStr) r = p.rate; else break; }
+    return r;
+  }
+
+  const rows = [];
+  let bal = P;
+  let prevDate = start;
+  let curPayment = null;   // 원리금균등: 현재 적용 중인 월상환액
+  let prevRate = null;
+  const amortPeriods = Math.max(1, n - grace);
+
+  for (let i = 1; i <= n; i++) {
+    const payDate = addMonths(start, i);
+    const annual = rateAt(prevDate);          // 이 회차 기간 동안 적용 금리
+    const mr = annual / 100 / 12;
+    let interest = bal * mr;
+    let principalPortion, payment;
+
+    if (i <= grace) {                          // 거치기간 — 이자만
+      principalPortion = 0;
+      payment = interest;
+    } else if (method === 'equalPrincipal') {  // 원금균등 — 원금 매기 동일
+      principalPortion = P / amortPeriods;
+      if (i === n) principalPortion = bal;     // 마지막 회차 잔액 정리
+      payment = principalPortion + interest;
+    } else {                                   // 원리금균등 — 총액 동일(금리변동 시 재산정)
+      const remaining = n - (i - 1);
+      if (curPayment === null || annual !== prevRate) curPayment = pmt(mr, remaining, bal);
+      principalPortion = curPayment - interest;
+      payment = curPayment;
+      if (i === n) { principalPortion = bal; payment = bal + interest; }
+    }
+
+    let endBal = bal - principalPortion;
+    if (Math.abs(endBal) < 0.5) endBal = 0;
+    rows.push({ no: i, date: payDate, annualRate: annual, startBal: bal, payment, interest, principal: principalPortion, endBal, grace: i <= grace });
+    bal = endBal;
+    prevDate = payDate;
+    prevRate = annual;
+  }
+
+  const totalInterest = rows.reduce((s, r) => s + r.interest, 0);
+  const totalPayment = rows.reduce((s, r) => s + r.payment, 0);
+  return { rows, totalInterest, totalPayment, maturityDate: addMonths(start, n) };
+}
+
+/*
+ * 기준일(asOf) 시점 계산: 현재 잔액·경과이자·중도상환수수료·절약이자·상환금액.
+ *   remainingPrincipal : 현재시점 남은 대출원금 (직전 회차까지 상환 반영)
+ *   accruedInterest    : 직전 상환일~기준일 경과이자 (일할, 실제일수/365)
+ *   fee                : 중도상환수수료 = 잔여원금 × 수수료율 × 잔여부과일수/총부과일수 (슬라이딩)
+ *   savedInterest      : 지금 갚으면 아끼는 이자 = 앞으로 낼 예정이자 − 지금 낼 경과이자
+ *   payoff             : 상환금액 = 잔여원금 + 경과이자 + 수수료
+ */
+function loanAsOf(sched, opts, asOf) {
+  const rows = sched.rows;
+  let k = 0;                                    // 기준일까지 납입 완료된 회차 수
+  for (const r of rows) { if (r.date <= asOf) k = r.no; else break; }
+  const remainingPrincipal = k === 0 ? +opts.principal : rows[k - 1].endBal;
+
+  const curRow = rows[k] || null;               // 진행 중(다음) 회차
+  const periodStart = k === 0 ? opts.startDate : rows[k - 1].date;
+  let accrued = 0, annual = 0;
+  if (curRow) {
+    annual = curRow.annualRate;
+    const days = Math.max(0, daysBetween(periodStart, asOf));
+    accrued = remainingPrincipal * (annual / 100) * days / 365;
+  }
+
+  // 앞으로 낼 예정이던 이자 (진행 중 회차 포함, k+1..n = rows[k..])
+  let futureInterest = 0;
+  for (let i = k; i < rows.length; i++) futureInterest += rows[i].interest;
+  const savedInterest = Math.max(0, futureInterest - accrued);
+
+  // 중도상환수수료 (슬라이딩): 부과기간 이내면 잔여일수 비례
+  let fee = 0;
+  const feeRate = +opts.prepayFeeRate || 0;
+  const feeMonths = Math.round(+opts.prepayFeeMonths || 0);
+  if (feeRate > 0 && feeMonths > 0) {
+    const feeEnd = addMonths(opts.startDate, feeMonths);
+    if (asOf < feeEnd) {
+      const totalDays = daysBetween(opts.startDate, feeEnd);
+      const remDays = Math.max(0, daysBetween(asOf, feeEnd));
+      fee = remainingPrincipal * (feeRate / 100) * (totalDays > 0 ? remDays / totalDays : 0);
+    }
+  }
+
+  const payoff = remainingPrincipal + accrued + fee;
+  return {
+    paidCount: k, remainingPrincipal, accruedInterest: accrued, appliedRate: annual,
+    futureInterest, savedInterest, fee, payoff, periodStart, currentPeriodNo: curRow ? curRow.no : null
+  };
+}
+
+// 원(₩) 반올림 표시
+function won(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '-';
+  return Math.round(v).toLocaleString('ko-KR') + '원';
+}
+// 억/만 보조 표기 (1만 미만은 빈 문자열)
+function koreanUnits(v) {
+  if (typeof v !== 'number' || !isFinite(v) || Math.abs(v) < 1e4) return '';
+  const neg = v < 0;
+  let n = Math.floor(Math.abs(v));
+  const eok = Math.floor(n / 1e8); n %= 1e8;
+  const man = Math.floor(n / 1e4);
+  let s = '';
+  if (eok) s += eok.toLocaleString('ko-KR') + '억 ';
+  if (man) s += man.toLocaleString('ko-KR') + '만';
+  return (neg ? '-' : '') + s.trim();
+}
+
+// node 단독 테스트용 export
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { parseKoreanNumber, addMonths, daysBetween, pmt, loanSchedule, loanAsOf, won, koreanUnits, ymd };
+}
+</script>
+
+<script id="loan-app">
+'use strict';
+(function () {
+  if (typeof document === 'undefined') return;   // node 테스트 시 앱 코드 실행 안 함
+  const $ = id => document.getElementById(id);
+  const STORE_KEY = 'loancalc_v1';
+
+  // ── 저장소 ──
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return { loans: [], activeId: null };
+  }
+  function saveStore() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(store)); } catch (e) {}
+  }
+  function newId() { return crypto.randomUUID ? crypto.randomUUID() : 'id' + Date.now() + Math.random(); }
+  function todayISO() { return ymd(new Date()); }
+
+  function blankLoan() {
+    return {
+      id: newId(), name: '새 대출',
+      method: 'equalPayment',
+      principal: '',            // 문자열(억/만 허용)
+      startDate: todayISO(),
+      termMonths: '',
+      baseRate: '',
+      graceMonths: '',
+      rateChanges: [],          // [{date, rate}]
+      asOfDate: todayISO(),
+      prepayFeeRate: '',
+      prepayFeeMonths: '',
+    };
+  }
+
+  let store = loadStore();
+  // 마이그레이션/초기값 방어
+  if (!store || typeof store !== 'object') store = { loans: [], activeId: null };
+  if (!Array.isArray(store.loans)) store.loans = [];
+  if (store.loans.length === 0) {
+    const l = blankLoan();
+    store.loans.push(l);
+    store.activeId = l.id;
+    saveStore();
+  }
+  if (!store.loans.find(l => l.id === store.activeId)) store.activeId = store.loans[0].id;
+
+  function active() { return store.loans.find(l => l.id === store.activeId); }
+
+  // ── 왼쪽 목록 ──
+  function renderList() {
+    const box = $('loanList');
+    box.innerHTML = '';
+    store.loans.forEach(l => {
+      const div = document.createElement('div');
+      div.className = 'item' + (l.id === store.activeId ? ' active' : '');
+      const P = parseKoreanNumber(l.principal);
+      const sub = (P ? koreanUnits(P) || (Math.round(P).toLocaleString('ko-KR') + '원') : '금액 미입력')
+        + (l.method === 'equalPrincipal' ? ' · 원금균등' : ' · 원리금균등');
+      div.innerHTML = '<div class="nm"></div><div class="sub"></div>';
+      div.querySelector('.nm').textContent = l.name || '(이름 없음)';
+      div.querySelector('.sub').textContent = sub;
+      div.addEventListener('click', () => { store.activeId = l.id; saveStore(); renderAll(); });
+      box.appendChild(div);
+    });
+  }
+
+  // ── 입력값 → 계산 가능한 숫자 opts ──
+  function toOpts(l) {
+    return {
+      principal: parseKoreanNumber(l.principal),
+      startDate: l.startDate,
+      termMonths: parseKoreanNumber(l.termMonths),
+      baseRate: parseKoreanNumber(l.baseRate),
+      method: l.method,
+      graceMonths: parseKoreanNumber(l.graceMonths) || 0,
+      rateChanges: (l.rateChanges || []).map(c => ({ date: c.date, rate: parseKoreanNumber(c.rate) })),
+      asOfDate: l.asOfDate,
+      prepayFeeRate: parseKoreanNumber(l.prepayFeeRate) || 0,
+      prepayFeeMonths: parseKoreanNumber(l.prepayFeeMonths) || 0,
+    };
+  }
+  function ready(o) {
+    return o.principal > 0 && o.termMonths > 0 && o.baseRate != null && o.startDate;
+  }
+
+  // ── 메인 렌더 ──
+  function renderAll() {
+    renderList();
+    const l = active();
+    const main = $('main');
+    main.innerHTML = TEMPLATE;
+    bindInputs(l);
+    renderRateTable(l);
+    recompute();
+  }
+
+  function bindInputs(l) {
+    // 이름
+    const nm = $('fName'); nm.value = l.name || '';
+    nm.addEventListener('input', () => { l.name = nm.value; saveStore(); renderList(); });
+
+    // 상환방식 라디오
+    document.querySelectorAll('input[name=method]').forEach(r => {
+      r.checked = (r.value === l.method);
+      r.closest('label').classList.toggle('on', r.checked);
+      r.addEventListener('change', () => {
+        l.method = r.value;
+        document.querySelectorAll('input[name=method]').forEach(x => x.closest('label').classList.toggle('on', x.checked));
+        saveStore(); recompute(); renderList();
+      });
+    });
+
+    // 텍스트/날짜 입력들
+    const map = [
+      ['fPrincipal', 'principal'], ['fStart', 'startDate'], ['fTerm', 'termMonths'],
+      ['fRate', 'baseRate'], ['fGrace', 'graceMonths'], ['fAsOf', 'asOfDate'],
+      ['fFeeRate', 'prepayFeeRate'], ['fFeeMonths', 'prepayFeeMonths'],
+    ];
+    map.forEach(([id, key]) => {
+      const el = $(id);
+      el.value = l[key] != null ? l[key] : '';
+      el.addEventListener('input', () => {
+        l[key] = el.value; saveStore(); recompute();
+        if (key === 'principal') renderList();   // 왼쪽 목록 요약 갱신
+      });
+    });
+  }
+
+  // ── 금리변동 미니표 ──
+  function renderRateTable(l) {
+    const box = $('rateRows');
+    box.innerHTML = '';
+    (l.rateChanges || []).forEach((c, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><input type="date" data-i="' + i + '" data-k="date"></td>' +
+        '<td><input type="text" data-i="' + i + '" data-k="rate" placeholder="예: 4.2" style="text-align:right"></td>' +
+        '<td><button class="del" data-i="' + i + '" title="삭제">✕</button></td>';
+      tr.querySelector('[data-k=date]').value = c.date || '';
+      tr.querySelector('[data-k=rate]').value = c.rate != null ? c.rate : '';
+      box.appendChild(tr);
+    });
+    box.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const i = +inp.dataset.i, k = inp.dataset.k;
+        l.rateChanges[i][k] = inp.value; saveStore(); recompute();
+      });
+    });
+    box.querySelectorAll('.del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        l.rateChanges.splice(+btn.dataset.i, 1); saveStore(); renderRateTable(l); recompute();
+      });
+    });
+  }
+
+  // ── 계산 & 결과 렌더 ──
+  function recompute() {
+    const l = active();
+    const o = toOpts(l);
+    const resultBox = $('resultBody');
+    const schedBox = $('schedBody');
+    const schedFoot = $('schedFoot');
+
+    if (!ready(o)) {
+      resultBox.innerHTML = '<div class="empty">빌린원금 · 대출기간 · 연이자율 · 대출개시일을 입력하면<br>결과가 자동으로 계산됩니다.</div>';
+      schedBox.innerHTML = '';
+      schedFoot.innerHTML = '';
+      return;
+    }
+
+    const sched = loanSchedule(o);
+    const asOf = loanAsOf(sched, o, l.asOfDate || todayISO());
+
+    // 월상환액 표기
+    const first = sched.rows.find(r => !r.grace) || sched.rows[0];
+    let monthlyLabel, monthlyNote;
+    if (o.method === 'equalPrincipal') {
+      const last = sched.rows[sched.rows.length - 1];
+      monthlyLabel = won(first.payment) + ' → ' + won(last.payment);
+      monthlyNote = '원금균등 — 매월 조금씩 줄어듦 (첫 회 → 마지막 회)';
+    } else {
+      monthlyLabel = won(first.payment);
+      monthlyNote = o.graceMonths > 0 ? '원리금균등 (거치 후) — 거치기간엔 이자만 납부' : '원리금균등 — 매월 동일';
+      if ((o.rateChanges || []).some(c => c.rate != null)) monthlyNote += ' · 금리변동 시 재산정';
+    }
+
+    resultBox.innerHTML =
+      '<div class="summary">' +
+        stat('월상환액', monthlyLabel, monthlyNote, 'blue') +
+        stat('만기일', sched.maturityDate, '대출개시일 + ' + Math.round(o.termMonths) + '개월', '') +
+        stat('총 납입이자', won(sched.totalInterest), '만기까지 예정 이자 합계 · ' + kUnit(sched.totalInterest), '') +
+        stat('총 상환금액', won(sched.totalPayment), '원금 + 이자 합계', '') +
+      '</div>' +
+
+      '<div class="subhead">📅 현재시점 대출잔액 <span style="font-weight:400;color:#64748b">(기준일 ' + (l.asOfDate || todayISO()) + ' · ' + asOf.paidCount + '회차 납입 완료)</span></div>' +
+      '<div class="breakdown">' +
+        bd('원금 (남은 대출원금)', won(asOf.remainingPrincipal)) +
+        bd('이자 (경과이자)', won(asOf.accruedInterest), '직전 상환일부터 오늘까지 · 연' + asOf.appliedRate + '%') +
+      '</div>' +
+
+      '<div class="subhead" style="margin-top:14px">💰 지금 중도상환 시 갚을 금액</div>' +
+      '<div class="breakdown">' +
+        bd('원금', won(asOf.remainingPrincipal)) +
+        bd('이자 (경과이자)', won(asOf.accruedInterest)) +
+        bd('중도상환수수료', won(asOf.fee), feeNote(o)) +
+        bd('합계 (상환금액)', won(asOf.payoff), '', 'total') +
+      '</div>' +
+      '<div class="summary" style="margin-top:12px">' +
+        stat('지금 중도상환 시 절약하는 이자', won(asOf.savedInterest), '앞으로 낼 예정이던 이자에서 오늘 낼 경과이자를 뺀 금액 · ' + kUnit(asOf.savedInterest), 'green') +
+      '</div>';
+
+    // 스케줄표
+    renderSchedule(sched, l.asOfDate || todayISO());
+  }
+
+  function stat(k, v, note, cls) {
+    return '<div class="stat ' + (cls || '') + (k.length > 14 ? ' wide' : '') + '">' +
+      '<div class="k">' + esc(k) + '</div>' +
+      '<div class="v">' + esc(v) + (note ? ' <small>' + esc(note) + '</small>' : '') + '</div></div>';
+  }
+  function bd(k, v, note, cls) {
+    return '<div class="b ' + (cls || '') + '"><div class="k">' + esc(k) + '</div>' +
+      '<div class="v">' + esc(v) + '</div>' + (note ? '<div class="k" style="margin-top:3px">' + esc(note) + '</div>' : '') + '</div>';
+  }
+  function kUnit(v) { const s = koreanUnits(v); return s ? '약 ' + s : ''; }
+  function feeNote(o) {
+    if (!(o.prepayFeeRate > 0 && o.prepayFeeMonths > 0)) return '수수료율/부과기간 미입력 시 0';
+    return '잔여원금 × ' + o.prepayFeeRate + '% × 잔여/' + Math.round(o.prepayFeeMonths) + '개월(슬라이딩)';
+  }
+
+  function renderSchedule(sched, asOfISO) {
+    const body = $('schedBody');
+    const foot = $('schedFoot');
+    let paidCount = 0;
+    for (const r of sched.rows) { if (r.date <= asOfISO) paidCount = r.no; else break; }
+    const currentNo = paidCount + 1;
+
+    body.innerHTML = sched.rows.map(r => {
+      let cls = '';
+      if (r.no <= paidCount) cls = 'paid';
+      else if (r.no === currentNo) cls = 'asof';
+      return '<tr class="' + cls + '">' +
+        '<td>' + r.no + (r.grace ? '<span class="grace-badge">거치</span>' : '') + '</td>' +
+        '<td>' + r.date + '</td>' +
+        '<td>' + r.annualRate + '%</td>' +
+        '<td>' + comma(r.payment) + '</td>' +
+        '<td>' + comma(r.interest) + '</td>' +
+        '<td>' + comma(r.principal) + '</td>' +
+        '<td>' + comma(r.endBal) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    foot.innerHTML =
+      '<tr><td colspan="3">합계</td>' +
+      '<td>' + comma(sched.totalPayment) + '</td>' +
+      '<td>' + comma(sched.totalInterest) + '</td>' +
+      '<td>' + comma(sched.rows.reduce((s, r) => s + r.principal, 0)) + '</td>' +
+      '<td>—</td></tr>';
+  }
+
+  function comma(v) { return Math.round(v).toLocaleString('ko-KR'); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  // ── 툴바 동작 ──
+  document.addEventListener('click', e => {
+    const t = e.target;
+    if (t.id === 'btnAddRate') {
+      const l = active();
+      l.rateChanges = l.rateChanges || [];
+      l.rateChanges.push({ date: '', rate: '' });
+      saveStore(); renderRateTable(l);
+    }
+    if (t.id === 'btnDup') {
+      const l = active();
+      const copy = JSON.parse(JSON.stringify(l));
+      copy.id = newId(); copy.name = (l.name || '대출') + ' 복사본';
+      store.loans.push(copy); store.activeId = copy.id; saveStore(); renderAll();
+    }
+    if (t.id === 'btnDel') {
+      if (store.loans.length <= 1) { alert('마지막 하나는 삭제할 수 없어요. 대신 새 대출로 초기화하세요.'); return; }
+      if (!confirm('이 대출 계산을 삭제할까요?')) return;
+      store.loans = store.loans.filter(x => x.id !== store.activeId);
+      store.activeId = store.loans[0].id; saveStore(); renderAll();
+    }
+    if (t.id === 'btnBackup') doBackup();
+    if (t.id === 'btnRestore') $('restoreFile').click();
+    if (t.id === 'btnTodayAsOf') { const l = active(); l.asOfDate = todayISO(); saveStore(); renderAll(); }
+  });
+  document.addEventListener('change', e => {
+    if (e.target.id === 'restoreFile') doRestore(e.target.files[0]);
+  });
+
+  $('btnNew').addEventListener('click', () => {
+    const l = blankLoan();
+    store.loans.push(l); store.activeId = l.id; saveStore(); renderAll();
+  });
+
+  // ── 백업 / 복원 (기록 소실 대비) ──
+  function doBackup() {
+    const blob = new Blob([JSON.stringify(store, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '대출계산기_백업_' + todayISO() + '.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function doRestore(file) {
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const data = JSON.parse(rd.result);
+        if (!data || !Array.isArray(data.loans)) throw new Error('형식 오류');
+        if (!confirm('백업 파일로 복원하면 현재 목록을 덮어씁니다. 진행할까요?')) return;
+        store = data;
+        if (!store.loans.find(l => l.id === store.activeId)) store.activeId = store.loans[0] && store.loans[0].id;
+        saveStore(); renderAll();
+        alert('복원 완료!');
+      } catch (e) { alert('복원 실패: 올바른 백업 파일이 아닙니다.'); }
+    };
+    rd.readAsText(file);
+  }
+
+  // ── 화면 템플릿 ──
+  const TEMPLATE = `
+    <div class="toolbar">
+      <input class="name" id="fName" title="대출 이름 (클릭해서 수정)">
+      <span class="spacer"></span>
+      <button class="tb-btn" id="btnBackup">💾 백업</button>
+      <button class="tb-btn" id="btnRestore">복원</button>
+      <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
+      <button class="tb-btn" id="btnDup">복제</button>
+      <button class="tb-btn danger" id="btnDel">삭제</button>
+    </div>
+    <div class="cards">
+      <div class="card input">
+        <h2>입력</h2>
+        <div class="field">
+          <label>상환방식</label>
+          <div class="radio-group">
+            <label><input type="radio" name="method" value="equalPayment"><span>원리금균등</span></label>
+            <label><input type="radio" name="method" value="equalPrincipal"><span>원금균등</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label>빌린원금 <span class="hint">(예: 3억, 5000만, 300000000)</span></label>
+          <input type="text" id="fPrincipal" placeholder="3억" inputmode="numeric">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>대출개시일</label>
+            <input type="date" id="fStart">
+          </div>
+          <div class="field">
+            <label>만기 <span class="hint">(대출기간·개월)</span></label>
+            <input type="text" id="fTerm" placeholder="360" inputmode="numeric">
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>이자 <span class="hint">(연이자율 %)</span></label>
+            <input type="text" id="fRate" placeholder="4.5" inputmode="decimal">
+          </div>
+          <div class="field">
+            <label>거치기간 <span class="hint">(개월, 없으면 0)</span></label>
+            <input type="text" id="fGrace" placeholder="0" inputmode="numeric">
+          </div>
+        </div>
+
+        <div class="field">
+          <label>금리변동 <span class="hint">(변동금리 — 적용일부터 바뀔 연이율)</span></label>
+          <table class="rate-table">
+            <thead><tr><th style="text-align:left;font-size:11px;color:#94a3b8;font-weight:600">적용일</th><th style="text-align:right;font-size:11px;color:#94a3b8;font-weight:600">연이율(%)</th><th></th></tr></thead>
+            <tbody id="rateRows"></tbody>
+          </table>
+          <button class="btn-add-rate" id="btnAddRate">＋ 금리변동 추가</button>
+        </div>
+
+        <div class="field" style="margin-top:16px;padding-top:14px;border-top:1px dashed #e2e8f0">
+          <label>중도상환 기준일 <span class="hint">(이 날짜 기준으로 잔액·상환액 계산)</span></label>
+          <div style="display:flex;gap:8px">
+            <input type="date" id="fAsOf">
+            <button class="tb-btn" id="btnTodayAsOf" style="white-space:nowrap">오늘</button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>중도상환수수료율 <span class="hint">(%)</span></label>
+            <input type="text" id="fFeeRate" placeholder="1.2" inputmode="decimal">
+          </div>
+          <div class="field">
+            <label>수수료 부과기간 <span class="hint">(개월)</span></label>
+            <input type="text" id="fFeeMonths" placeholder="36" inputmode="numeric">
+          </div>
+        </div>
+      </div>
+
+      <div class="card result">
+        <h2>결과</h2>
+        <div id="resultBody"></div>
+      </div>
+    </div>
+
+    <div class="sched-wrap">
+      <div class="sched-tools">
+        <h2>📋 상환 스케줄표</h2>
+        <span style="font-size:12px;color:#94a3b8">회색=상환 완료 · 노랑=기준일 진행 중 회차</span>
+      </div>
+      <div class="sched-scroll">
+        <table class="sched">
+          <thead>
+            <tr><th>회차</th><th>상환일</th><th>적용금리</th><th>상환액</th><th>납입이자</th><th>납입원금</th><th>잔액</th></tr>
+          </thead>
+          <tbody id="schedBody"></tbody>
+          <tfoot id="schedFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+  `;
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
