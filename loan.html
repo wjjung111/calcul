@@ -461,6 +461,26 @@ if (typeof module !== 'undefined' && module.exports) {
     recompute();
   }
 
+  // 빌린원금 입력칸: 숫자만 넣으면 천단위 콤마 자동 (억/만/% 등 한글단위는 그대로 둠)
+  function commafy(el) {
+    const v = el.value;
+    if (/[억만조%\s]/.test(v)) return;               // 한글단위 입력이면 자동 콤마 미적용
+    const digits = v.replace(/,/g, '');
+    if (digits === '' || !/^\d*\.?\d*$/.test(digits)) return;
+    const caretDigits = v.slice(0, el.selectionStart == null ? v.length : el.selectionStart)
+      .replace(/,/g, '').length;                     // 커서 앞 숫자 개수
+    const [ip, fp] = digits.split('.');
+    const formatted = (ip ? Number(ip).toLocaleString('en-US') : '') + (fp !== undefined ? '.' + fp : '');
+    if (formatted === v) return;
+    el.value = formatted;
+    let count = 0, pos = 0;                           // 커서 위치 복원
+    for (; pos < formatted.length; pos++) {
+      if (/\d/.test(formatted[pos])) count++;
+      if (count >= caretDigits) { pos++; break; }
+    }
+    try { el.setSelectionRange(pos, pos); } catch (e) {}
+  }
+
   function bindInputs(l) {
     // 이름
     const nm = $('fName'); nm.value = l.name || '';
@@ -486,9 +506,11 @@ if (typeof module !== 'undefined' && module.exports) {
     map.forEach(([id, key]) => {
       const el = $(id);
       el.value = l[key] != null ? l[key] : '';
+      if (key === 'principal') commafy(el);      // 초기값도 콤마 표시
       el.addEventListener('input', () => {
+        if (key === 'principal') commafy(el);     // 입력 즉시 천단위 콤마
         l[key] = el.value; saveStore(); recompute();
-        if (key === 'principal') renderList();   // 왼쪽 목록 요약 갱신
+        if (key === 'principal') renderList();     // 왼쪽 목록 요약 갱신
       });
     });
   }
