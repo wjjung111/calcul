@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>아이스 아메리카노</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gaegu:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#231d1a; --fg:#efe7da; --muted:#a89a88; --accent:#e2b457; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; overflow:hidden; }
+  #wrap { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:8px; }
+  canvas { display:block; border-radius:6px; box-shadow:0 12px 40px rgba(0,0,0,.55); background:#d6ccbb; }
+  #bar { display:flex; align-items:center; gap:10px; min-width:260px; }
+  #play { width:40px; height:40px; flex:none; border:0; border-radius:50%; background:var(--accent); color:#231d1a;
+    font-size:16px; cursor:pointer; display:grid; place-items:center; }
+  #play:focus-visible, #seek:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+  #seek { flex:1; accent-color:var(--accent); cursor:pointer; min-width:0; }
+  #time { font-variant-numeric:tabular-nums; font-size:13px; color:var(--muted); width:74px; text-align:right; flex:none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv" width="1080" height="1920"></canvas>
+  <div id="bar">
+    <button id="play" aria-label="재생/일시정지">❚❚</button>
+    <input id="seek" type="range" min="0" max="22" step="0.01" value="0" aria-label="재생 위치">
+    <span id="time">0.00 / 22</span>
+  </div>
+</div>
+<script>
+/* =====================================================================
+   0. 설정 — 문구 · 색 · 배치 · 장면 시간표 · 카메라  (여기만 고치면 됨)
+   ===================================================================== */
+const TEXT = {
+  title:     '아이스 아메리카노',
+  subtitle:  '한 잔이 되기까지',
+  labels:    ['볶은 원두', '곱게 갈기', '에스프레소 추출', '얼음 + 찬물', '완성!'],
+  endTitle:  '아이스 아메리카노',
+  signature: '— 연필로 그린 한 잔 —',
+};
+
+const COLOR = {
+  paper:'#ECE6DA', desk:'#D3C8B6', fill:'#F3EEE4',
+  grid:'rgba(38,128,128,0.10)', gridBold:'rgba(38,128,128,0.24)',
+  ink:'#2E2622', doodle:'#8C7862',
+  bean:'#6B4127', beanCrease:'#3A2215', ground:'#5A3620', crema:'#C58E57',
+  ice:'#CEE8F4', iceLine:'#4F7F9A', water:'rgba(214,236,247,0.80)', coffee:'74,43,24',
+  highlight:'rgba(255,224,52,0.62)', check:'#B2432F', retrace:'#7A4A28',
+  vignette:'rgba(78,48,24,0.42)',
+};
+
+// 종이 위 좌표(가운데 기준) · 크기 · 쓰기 시작 시각
+const LAYOUT = {
+  title:     { x:540, y:335,  size:106, t:0.0  },
+  subtitle:  { x:540, y:508,  size:58,  t:0.9  },
+  labels: [
+             { x:430, y:1375, size:74,  t:3.05 },
+             { x:760, y:2235, size:74,  t:6.3  },
+             { x:450, y:3122, size:64,  t:10.6 },
+             { x:812, y:3412, size:62,  t:14.45},
+             { x:620, y:4222, size:76,  t:17.3 },
+  ],
+  endTitle:  { x:620, y:4340, size:98,  t:20.15},
+  signature: { x:620, y:4418, size:34,  t:20.75},
+};
+
+// 장면 시간표 (초)
+const TL = {
+  beanFall:[0.9,1.28], beanTravel:[1.62,2.9],
+  bowlDraw:[2.05,2.95], steam:3.3, bowlTilt:[4.15,4.55],
+  grinderDraw:[4.45,5.45], crank:[5.75,7.65], grounds:[6.05,8.1],
+  machine:[8.25,10.0], espresso:[10.15,11.75],
+  shotWalk:[12.0,12.62], glassDraw:[12.3,12.95], ice:[13.1,13.45,13.8],
+  water:[14.2,15.15], pour:[15.35,16.95], straw:[17.25,17.55], drops:[17.55,18.15],
+  retrace:[18.35,19.35], checks:[18.95,19.45],
+};
+
+// 카메라: [시각, 바라보는 x, y, 확대, 움직이는 방식]
+//  slow=천천히  whip=휙(짧게, 도착 시 멈칫, 모션블러)  accel=가속  snap=확 줌인
+const CAMERA = [
+  [0,     520,  380, 1.42, ''     ],
+  [1.9,   545,  470, 1.26, 'slow' ],
+  [2.55,  445, 1060, 1.16, 'whip' ],
+  [4.35,  450, 1070, 1.24, 'slow' ],
+  [5.1,   640, 1890, 1.20, 'accel'],
+  [7.75,  650, 1930, 1.31, 'slow' ],
+  [8.3,   450, 2790, 1.15, 'whip' ],
+  [10.0,  445, 2805, 1.23, 'slow' ],
+  [10.45, 448, 2960, 1.55, 'snap' ],
+  [11.95, 448, 2972, 1.63, 'slow' ],
+  [12.6,  620, 3790, 1.06, 'whip' ],
+  [15.3,  622, 3800, 1.13, 'slow' ],
+  [18.25, 612, 3770, 1.28, 'slow' ],
+  [18.85, 620, 2240, 0.43, 'accel'],
+  [19.55, 620, 2230, 0.45, 'slow' ],
+  [20.12, 620, 4000, 1.07, 'snap' ],
+  [22,    620, 4010, 1.12, 'slow' ],
+];
+const PARALLAX = { pos:0.82, zoom:0.72 };   // 뒤 낙서 층
+const DUR = 22, W = 1080, H = 1920;
+
+/* =====================================================================
+   1. 수학 도구
+   ===================================================================== */
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp  = (a, b, s) => a + (b - a) * s;
+const prog  = (t, a, b) => clamp((t - a) / (b - a));
+const E = {
+  inQ: s => s * s,
+  inC: s => s * s * s,
+  outQ: s => 1 - (1 - s) * (1 - s),
+  outC: s => 1 - Math.pow(1 - s, 3),
+  io: s => -(Math.cos(Math.PI * s) - 1) / 2,
+  ioC: s => s < .5 ? 4 * s * s * s : 1 - Math.pow(-2 * s + 2, 3) / 2,
+  ioQ4: s => s < .5 ? 8 * s ** 4 : 1 - Math.pow(-2 * s + 2, 4) / 2,
+  outBack: s => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(s - 1, 3) + c1 * Math.pow(s - 1, 2); },
+  outExpo: s => s >= 1 ? 1 : 1 - Math.pow(2, -10 * s),
+  // 휙: 빠르게 가서 살짝 넘어간 뒤 멈칫하며 되돌아옴
+  whip: s => { const k = .58; if (s < k) return 1.035 * E.ioC(s / k); return 1.035 - .035 * E.io((s - k) / (1 - k)); },
+};
+function rnd(a, b) { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453123; return x - Math.floor(x); }
+
+/* =====================================================================
+   2. 선 모양 만들기 (점 배열)
+   ===================================================================== */
+function dense(pts, step = 9) {
+  const o = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / step));
+    for (let k = 1; k <= n; k++) o.push([x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n]);
+  }
+  return o;
+}
+const G = {
+  line: (...p) => dense(p),
+  poly: (p, step) => dense(p, step),
+  rect: (x0, y0, x1, y1) => dense([[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0 - 3]]),
+  bez(p0, p1, p2, p3) {
+    const o = [];
+    for (let k = 0; k <= 48; k++) {
+      const s = k / 48, u = 1 - s;
+      o.push([u*u*u*p0[0] + 3*u*u*s*p1[0] + 3*u*s*s*p2[0] + s*s*s*p3[0],
+              u*u*u*p0[1] + 3*u*u*s*p1[1] + 3*u*s*s*p2[1] + s*s*s*p3[1]]);
+    }
+    return dense(o);
+  },
+  ell(cx, cy, rx, ry, a0 = -2.1, sweep = Math.PI * 2 + 0.35) {
+    const n = Math.max(10, Math.ceil(Math.PI * (rx + ry) * sweep / (Math.PI * 2) / 8));
+    const o = [];
+    for (let k = 0; k <= n; k++) { const a = a0 + sweep * k / n; o.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]); }
+    return o;
+  },
+  chain(...arrs) { const o = []; arrs.forEach((a, i) => o.push(...(i ? a.slice(1) : a))); return o; },
+};
+// 로컬 스케일 → 회전 → 월드 스케일 → 이동
+function xf(pts, { x = 0, y = 0, r = 0, s = 1, wx = 1, wy = 1 } = {}) {
+  const c = Math.cos(r), sn = Math.sin(r);
+  return pts.map(([px, py]) => { px *= s; py *= s; return [x + (px * c - py * sn) * wx, y + (px * sn + py * c) * wy]; });
+}
+function lengths(p) { const c = [0]; for (let i = 1; i < p.length; i++) c.push(c[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1])); return c; }
+function sub(pts, a, b) {
+  if (a <= 0 && b >= 1) return pts;
+  const c = lengths(pts), L = c[c.length - 1], A = a * L, B = b * L, out = [];
+  const at = (i, X) => { const f = (X - c[i - 1]) / ((c[i] - c[i - 1]) || 1); return [lerp(pts[i - 1][0], pts[i][0], f), lerp(pts[i - 1][1], pts[i][1], f)]; };
+  for (let i = 0; i < pts.length; i++) {
+    if (c[i] < A) continue;
+    if (!out.length && i > 0) out.push(at(i, A));
+    if (c[i] > B) { if (i > 0) out.push(at(i, B)); break; }
+    out.push(pts[i]);
+  }
+  return out;
+}
+function makePath(pts) {
+  const cum = lengths(pts), len = cum[cum.length - 1];
+  return { pts, len, at(u) {
+    const X = clamp(u) * len; let lo = 1, hi = cum.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cum[m] < X) lo = m + 1; else hi = m; }
+    const i = Math.max(1, lo), f = (X - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+    return { x: lerp(pts[i - 1][0], pts[i][0], f), y: lerp(pts[i - 1][1], pts[i][1], f),
+             a: Math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0]) };
+  } };
+}
+
+/* =====================================================================
+   3. 연필 선 · 글자 그리기
+   ===================================================================== */
+const cv = document.getElementById('cv');
+const main = cv.getContext('2d');
+const buf = document.createElement('canvas'); buf.width = W; buf.height = H;
+const ctx = buf.getContext('2d');
+let VAR = 0;   // 떨림 3벌 중 몇 번째 (1초 12번 교대)
+
+// 손그림 선: 점마다 ±jit 흔들림, 진한 선 + 절반 굵기 45% 선, p0~p 구간만 그림
+function ink(pts, o = {}) {
+  const { p = 1, p0 = 0, id = 1, color = COLOR.ink, w = 4, jit = 2, alpha = 1, dash = 0, over = true } = o;
+  if (p <= p0 + 1e-4 || !pts || pts.length < 2 || alpha <= 0) return;
+  const P = sub(pts, p0, p), n = P.length;
+  if (n < 2) return;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = color;
+  for (let pass = 0; pass < (over ? 2 : 1); pass++) {
+    const seed = id * 1.618 + pass * 57.3 + VAR * 13.1;
+    ctx.beginPath();
+    let dist = 0, down = false;
+    for (let i = 0; i < n; i++) {
+      const a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)];
+      let nx = a[1] - b[1], ny = b[0] - a[0]; const L = Math.hypot(nx, ny) || 1; nx /= L; ny /= L;
+      const off = (rnd(seed, i) - .5) * 2 * jit;
+      const x = P[i][0] + nx * off, y = P[i][1] + ny * off;
+      if (i > 0) dist += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+      if (!dash || Math.floor(dist / dash) % 2 === 0) { if (!down) { ctx.moveTo(x, y); down = true; } else ctx.lineTo(x, y); }
+      else down = false;
+    }
+    ctx.globalAlpha = alpha * (pass ? 0.45 : 1);
+    ctx.lineWidth = pass ? w / 2 : w;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+function fillPts(pts, color, alpha = 1) {
+  if (alpha <= 0 || pts.length < 3) return;
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.globalAlpha = alpha; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+}
+function setFont(size) { ctx.font = `700 ${size}px Gaegu, "Comic Sans MS", cursive`; }
+// 왼쪽부터 1초에 10칸씩 계단처럼 써짐
+function write(str, x, y, size, t0, t, o = {}) {
+  const chars = Array.from(str);
+  setFont(size);
+  const full = ctx.measureText(str).width;
+  const left = o.left ?? x - full / 2;
+  const n = t < t0 ? 0 : Math.min(chars.length, Math.floor((t - t0) * 10) + 1);
+  if (n > 0) {
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.fillStyle = o.color || COLOR.ink; ctx.globalAlpha = o.alpha ?? 1;
+    ctx.fillText(chars.slice(0, n).join(''), left + (rnd(VAR, size) - .5) * 1.4, y + (rnd(VAR + 5, size) - .5) * 1.4);
+    ctx.globalAlpha = 1;
+  }
+  return { left, width: full, done: t0 + chars.length / 10 };
+}
+
+/* =====================================================================
+   4. 고정 도형 (종이 위 좌표)
+   ===================================================================== */
+// 경로선
+const P1 = makePath(G.chain(G.bez([930, 362], [990, 380], [960, 560], [800, 680]),
+                            G.bez([800, 680], [640, 800], [380, 830], [458, 982])));
+const PB = makePath(G.bez([592, 1030], [720, 1090], [720, 1500], [660, 1775]));
+const P2 = makePath(G.bez([660, 2026], [660, 2100], [520, 2080], [485, 2168]));
+const P3 = makePath(G.bez([480, 2190], [820, 2330], [790, 2820], [450, 2900]));
+const P4 = makePath(G.bez([450, 2955], [640, 3250], [260, 3600], [440, 3920]));
+const TRAILS = [P1, PB, P2, P3, P4];
+
+// 원두
+const BEAN = { out: G.ell(0, 0, 24, 17, -2.2, Math.PI * 2 + .3), crease: G.bez([-17, 4], [-6, -9], [6, 9], [17, -4]) };
+function bean(st, id) {
+  if (!st || st.s <= 0.02) return;
+  const T = { x: st.x, y: st.y, r: st.r, s: st.s, wx: st.wx || 1, wy: st.wy || 1 };
+  const o = xf(BEAN.out, T);
+  fillPts(o, COLOR.bean);
+  ink(o, { id: id * 3 + 1, jit: 1.5 });
+  ink(xf(BEAN.crease, T), { id: id * 3 + 2, color: COLOR.beanCrease, w: 3.4, jit: 1.2, over: false });
+}
+
+// 그릇 (피벗 = 오른쪽 입구 580,1040 기준 로컬 좌표)
+const BOWL = { px: 580, py: 1040,
+  rim: G.ell(-130, 0, 130, 26), body: G.bez([-260, 0], [-255, 118], [-5, 118], [0, 0]),
+  foot: G.line([-180, 93], [-80, 93]), hatch: [0, 1, 2].map(k => G.line([-60 + k * 16, 20 + k * 6], [-30 + k * 12, 70 - k * 4])) };
+// 그릇 속 원두 더미 (그릇 가장자리 가운데 기준), 마지막이 주인공 원두
+const PILE = [[-80, -10, .3], [-42, -16, -.5], [-2, -12, .2], [38, -18, 1.2], [78, -9, -.3],
+              [-60, -34, .9], [-20, -38, -1], [20, -36, .4], [58, -32, -.8], [8, -58, 0]];
+const ORDER = PILE.map((p, i) => i).sort((a, b) => PILE[b][0] - PILE[a][0]).reduce((o, idx, k) => (o[idx] = k, o), []);
+
+// 그라인더
+const GR = {
+  hopRim: G.ell(660, 1790, 70, 13), hopL: G.line([590, 1790], [622, 1842]), hopR: G.line([730, 1790], [698, 1842]),
+  hopFill: [[590, 1790], [730, 1790], [698, 1842], [622, 1842]],
+  body: G.rect(604, 1842, 716, 2000), bodyFill: [[604, 1842], [716, 1842], [716, 2000], [604, 2000]],
+  drawer: G.line([604, 1935], [716, 1935]), knob: G.ell(660, 1968, 9, 9),
+  spout: G.poly([[645, 2000], [651, 2024], [669, 2024], [675, 2000]]),
+  shaft: G.line([660, 1790], [660, 1752]),
+  hatch: [0, 1, 2, 3].map(k => G.line([688, 1872 + k * 30], [712, 1858 + k * 30])),
+};
+// 포터필터 (바스켓 입구 가운데 기준)
+const PF = {
+  rim: G.line([-62, 0], [62, 0]), basket: G.bez([-62, 0], [-58, 50], [58, 50], [62, 0]),
+  hA: G.line([-60, 10], [-205, 18]), hB: G.line([-58, 28], [-205, 34]), cap: G.ell(-207, 26, 7, 9),
+  hFill: [[-60, 10], [-205, 18], [-205, 34], [-58, 28]],
+  block: G.poly([[-18, 42], [-13, 52], [13, 52], [18, 42]]), s1: G.line([-7, 52], [-7, 62]), s2: G.line([7, 52], [7, 62]),
+};
+// 에스프레소 머신
+const MC = {
+  body: G.rect(270, 2560, 630, 2742), bodyFill: [[270, 2560], [630, 2560], [630, 2742], [270, 2742]],
+  top: G.line([290, 2590], [610, 2590]), gauge: G.ell(340, 2655, 28, 28), needle: G.line([340, 2655], [357, 2637]),
+  b1: G.ell(560, 2650, 12, 12), b2: G.ell(598, 2650, 12, 12),
+  group: G.poly([[398, 2742], [404, 2798], [496, 2798], [502, 2742]]),
+  wand: G.bez([630, 2600], [684, 2610], [676, 2700], [666, 2748]),
+  tray: G.rect(320, 3000, 580, 3016), trayFill: [[320, 3000], [580, 3000], [580, 3016], [320, 3016]],
+  hatch: [0, 1, 2, 3, 4].map(k => G.line([470 + k * 28, 2728], [500 + k * 28, 2700])),
+};
+// 탬퍼 (바닥 가운데 기준)
+const TP = { disk: G.rect(-52, -14, 52, 0), diskFill: [[-52, -14], [52, -14], [52, 0], [-52, 0]],
+  s1: G.line([-8, -14], [-8, -40]), s2: G.line([8, -14], [8, -40]), knob: G.ell(0, -52, 14, 13) };
+// 샷잔 (가운데 기준)
+const SG = { left: G.line([-38, -40], [-31, 40]), bottom: G.line([-31, 40], [31, 40]), right: G.line([31, 40], [38, -40]),
+  rim: G.ell(0, -40, 38, 6), base: G.line([-30, 46], [30, 46]), fill: [[-38, -40], [38, -40], [31, 40], [-31, 40]] };
+// 큰 유리잔
+const BG = { cx: 640, top: 3690, bot: 3970,
+  left: G.line([515, 3690], [535, 3970]), right: G.line([765, 3690], [745, 3970]), bottom: G.line([535, 3970], [745, 3970]),
+  rim: G.ell(640, 3690, 125, 14), base: G.line([540, 3984], [740, 3984]),
+  hl1: G.line([543, 3728], [556, 3930]), hl2: G.line([561, 3728], [566, 3800]),
+  inner: [[515, 3690], [765, 3690], [745, 3970], [535, 3970]] };
+const hw = y => 125 - 20 * (y - 3690) / 280;   // 유리잔 반폭
+// 얼음
+const CUBE = { out: G.poly([[-30, -27], [27, -31], [31, 26], [-27, 30], [-30, -27]], 8),
+  f1: G.line([-17, -14], [-4, -19]), f2: G.line([12, 19], [20, 7]) };
+const ICE = [{ x: 588, y: 3930, r: .15 }, { x: 692, y: 3926, r: -.22 }, { x: 636, y: 3868, r: .4 }];
+// 빨대 (아래 끝 기준)
+const ST = { L: G.line([-8, 0], [-8, -440]), R: G.line([8, 0], [8, -440]), top: G.ell(0, -440, 8, 4),
+  fill: [[-8, 0], [8, 0], [8, -440], [-8, -440]], stripes: [...Array(8)].map((_, k) => G.line([-8, -30 - 52 * k], [8, -52 - 52 * k])) };
+const DROP = G.chain(G.bez([0, -9], [7, -2], [7, 6], [0, 6]), G.bez([0, 6], [-7, 6], [-7, -2], [0, -9]));
+const DROPLETS = [...Array(14)].map((_, k) => { const y = 3718 + rnd(k, 31) * 232; const h = hw(y) - 16;
+  return { x: 640 + (rnd(k, 32) * 2 - 1) * h, y, s: .8 + rnd(k, 33) * .6 }; });
+
+// 뒤 낙서 층
+const DOODLES = [...Array(70)].map((_, i) => {
+  const type = Math.floor(rnd(i, 3) * 5), s = .7 + rnd(i, 4) * 1.1;
+  let pts;
+  if (type === 0) { pts = []; for (let k = 0; k <= 60; k++) { const a = k * .32, r = 3 + k * .7; pts.push([Math.cos(a) * r, Math.sin(a) * r]); } }
+  else if (type === 1) { pts = []; for (let k = 0; k <= 10; k++) { const a = -Math.PI / 2 + k * Math.PI / 5, r = k % 2 ? 14 : 34; pts.push([Math.cos(a) * r, Math.sin(a) * r]); } pts = dense(pts); }
+  else if (type === 2) pts = G.chain(G.poly([[-26, -24], [-20, 24], [20, 24], [26, -24]]), G.bez([26, -24], [26, -24], [46, -10], [22, 8]));
+  else if (type === 3) { pts = []; for (let k = 0; k <= 30; k++) pts.push([-60 + k * 4, Math.sin(k * .6) * 10]); }
+  else pts = G.chain(G.line([-40, 0], [40, 0]), G.line([40, 0], [26, -12]), G.line([26, -12], [40, 0], [26, 12]));
+  return { pts: xf(pts, { x: -700 + rnd(i, 1) * 2200, y: -1500 + rnd(i, 2) * 6500, r: rnd(i, 5) * 6, s }), id: 5000 + i };
+});
+
+/* =====================================================================
+   5. 카메라
+   ===================================================================== */
+const EASE_OF = { slow: E.io, whip: E.whip, accel: E.ioQ4, snap: E.outExpo };
+function camAt(t) {
+  const K = CAMERA;
+  if (t <= K[0][0]) return { x: K[0][1], y: K[0][2], z: K[0][3], mode: '' };
+  for (let i = 0; i < K.length - 1; i++) {
+    const a = K[i], b = K[i + 1];
+    if (t <= b[0]) {
+      const e = EASE_OF[b[4]](prog(t, a[0], b[0]));
+      return { x: lerp(a[1], b[1], e), y: lerp(a[2], b[2], e), z: Math.exp(lerp(Math.log(a[3]), Math.log(b[3]), e)), mode: b[4] };
+    }
+  }
+  const L = K[K.length - 1]; return { x: L[1], y: L[2], z: L[3], mode: '' };
+}
+function setCam(c) { ctx.setTransform(c.z, 0, 0, c.z, W / 2 - c.x * c.z, H / 2 - c.y * c.z); }
+
+/* =====================================================================
+   6. 장면별 상태 (모두 t 하나로 계산)
+   ===================================================================== */
+function heroState(t) {
+  if (t < 0.9) return null;
+  if (t < 1.12) { const u = E.inQ(prog(t, .9, 1.12)); return { x: 760, y: lerp(90, 362, u), r: lerp(-2.8, .2, u), s: 1 }; }
+  if (t < 1.17) { const q = Math.sin(Math.PI * prog(t, 1.12, 1.17)) * .32; return { x: 760, y: 362 + 17 * q, r: .2, s: 1, wx: 1 + q, wy: 1 - q }; }
+  if (t < 1.28) { const u = prog(t, 1.17, 1.28); return { x: 760, y: 362 - 20 * Math.sin(Math.PI * u), r: .2 + .25 * Math.sin(Math.PI * u), s: 1 }; }
+  if (t < 1.34) { const q = Math.sin(Math.PI * prog(t, 1.28, 1.34)) * .12; return { x: 760, y: 362 + 17 * q, r: .2, s: 1, wx: 1 + q, wy: 1 - q }; }
+  if (t < 1.62) return { x: 760, y: 362, r: .2, s: 1 };
+  if (t < 2.0) { const d = 170 * E.inQ(prog(t, 1.62, 2.0)); return { x: 760 + d, y: 362, r: .2 + d / 19, s: 1 }; }
+  const u = prog(t, 2.0, 2.85), e = u * u * (3 - 2 * u), p = P1.at(e);
+  return { x: p.x, y: p.y, r: .2 + 170 / 19 + P1.len * e / 19, s: 1 };
+}
+PILE[9][2] = heroState(2.849).r % (Math.PI * 2);
+
+const bowlAngle = t => .78 * E.outBack(prog(t, 4.15, 4.45)) * (1 - E.io(prog(t, 4.85, 5.3)));
+function beanState(i, t) {
+  const P = PILE[i], lx = P[0] - 130, ly = P[1];
+  const launch = 4.2 + ORDER[i] * 0.035, fl = 0.42;
+  if (t < launch) {
+    let s = 1, dy = 0;
+    if (i < 9) {
+      const tp = 2.4 + i * .055, u = prog(t, tp, tp + .2);
+      if (t < tp) return null;
+      s = clamp(E.outBack(u), 0, 1.2); dy = -16 * Math.sin(Math.PI * clamp(u * 1.4));
+    } else {
+      if (t < 2.85) return heroState(t);
+      dy = -10 * Math.sin(Math.PI * prog(t, 2.85, 2.97));
+    }
+    const a = bowlAngle(t), [[x, y]] = xf([[lx, ly + dy]], { x: BOWL.px, y: BOWL.py, r: a });
+    return { x, y, r: P[2] + a, s };
+  }
+  const u = (t - launch) / fl;
+  if (u >= 1) return null;
+  const a = bowlAngle(launch), [[x0, y0]] = xf([[lx, ly]], { x: BOWL.px, y: BOWL.py, r: a });
+  const x1 = 660 + (rnd(i, 5) - .5) * 44, y1 = 1796;
+  return { x: lerp(x0, x1, u), y: y0 + (y1 - y0) * u * u - 170 * u * (1 - u),
+           r: P[2] + a + u * 7 * (rnd(i, 7) > .5 ? 1 : -1), s: u < .8 ? 1 : lerp(1, .2, (u - .8) / .2) };
+}
+
+const GRAIN_N = 56, GRAIN_FL = 0.36;
+const grainT = i => 6.05 + i * (1.7 / GRAIN_N);
+function groundsHeight(t) {
+  let a = 0; for (let i = 0; i < GRAIN_N; i++) a += prog(t, grainT(i) + GRAIN_FL, grainT(i) + GRAIN_FL + .08);
+  return 34 * a / GRAIN_N - 20 * E.io(prog(t, 9.05, 9.25));
+}
+function pfPose(t) {
+  if (t < 8.25) return { x: 480, y: 2190, r: 0 };
+  if (t < 8.55) { const u = E.ioC(prog(t, 8.25, 8.55)), p = P3.at(u); return { x: p.x, y: p.y, r: .14 * Math.sin(Math.PI * u) }; }
+  if (t < 9.6) return { x: 450, y: 2900, r: 0 };
+  if (t < 9.82) return { x: 450, y: lerp(2900, 2810, E.inC(prog(t, 9.6, 9.82))), r: 0 };
+  if (t < 9.92) return { x: 450, y: 2810 + 5 * Math.sin(Math.PI * prog(t, 9.82, 9.92)), r: 0 };
+  return { x: 450, y: 2810, r: 0 };
+}
+function tamperPose(t) {
+  if (t < 8.75 || t > 9.6) return null;
+  const top = 2900 - 34;
+  if (t < 9.05) { const u = E.outC(prog(t, 8.75, 9.05)); return { x: lerp(790, 450, u), y: lerp(2770, top, u), wy: 1 }; }
+  if (t < 9.35) { const u = E.io(prog(t, 9.05, 9.25)); return { x: 450, y: top + 20 * u, wy: t < 9.25 ? 1 - .14 * Math.sin(Math.PI * u) : 1 }; }
+  const u = E.inC(prog(t, 9.35, 9.6)); return { x: lerp(450, 820, u), y: lerp(2886, 2700, u), wy: 1 };
+}
+const shotLevel = t => .85 * E.io(prog(t, 10.3, 11.6)) * (1 - prog(t, 15.7, 16.5));
+function shotPose(t) {
+  if (t < 12.0) return { x: 450, y: 2955, r: 0 };
+  if (t < 12.62) {
+    const u = prog(t, 12.0, 12.62), p = P4.at(E.io(u)), w = Math.sin(u * Math.PI * 7);
+    return { x: p.x, y: p.y - Math.abs(w) * 14, r: w * .2 };
+  }
+  if (t < 15.35) { const d = prog(t, 12.62, 12.9); return { x: 440, y: 3920, r: .12 * Math.sin(d * Math.PI * 3) * (1 - d) }; }
+  if (t < 15.7) { const u = E.ioC(prog(t, 15.35, 15.7)); return { x: lerp(440, 548, u), y: lerp(3920, 3612, u), r: 1.95 * E.io(u) }; }
+  if (t < 16.55) return { x: 548, y: 3612, r: 1.95 + .06 * Math.sin((t - 15.7) * 7) };
+  if (t < 16.95) { const u = E.ioC(prog(t, 16.55, 16.95)); return { x: lerp(548, 440, u), y: lerp(3612, 3920, u), r: lerp(1.95 + .06 * Math.sin(.85 * 7), 0, u) }; }
+  return { x: 440, y: 3920, r: 0 };
+}
+function iceState(c, t0, t) {
+  if (t < t0) return null;
+  const f = .22;
+  if (t < t0 + f) { const u = E.inQ((t - t0) / f); return { x: c.x, y: lerp(3480, c.y, u), r: c.r - 1.1 * (1 - u) }; }
+  const v = t - t0 - f;
+  if (v < .07) { const q = Math.sin(Math.PI * v / .07) * .2; return { x: c.x, y: c.y + 30 * q, r: c.r, wx: 1 + q, wy: 1 - q }; }
+  if (v < .21) { const w = (v - .07) / .14; return { x: c.x, y: c.y - 18 * Math.sin(Math.PI * w), r: c.r + .08 * Math.sin(Math.PI * w) }; }
+  if (v < .27) { const q = Math.sin(Math.PI * (v - .21) / .06) * .07; return { x: c.x, y: c.y + 30 * q, r: c.r, wx: 1 + q, wy: 1 - q }; }
+  return { x: c.x, y: c.y, r: c.r };
+}
+const waterLevel = t => t < 14.33 ? null : lerp(3968, 3765, E.io(prog(t, 14.33, 15.15)));
+const waveAmp = t => 5 * prog(t, 14.33, 14.5) * (1 - prog(t, 15.15, 15.9)) + 3.5 * prog(t, 15.75, 16.1) * (1 - prog(t, 16.6, 17.4));
+
+/* =====================================================================
+   7. 그리기
+   ===================================================================== */
+function drawDoodles() {
+  for (const d of DOODLES) ink(d.pts, { id: d.id, color: COLOR.doodle, alpha: .38, w: 3.5, over: false });
+}
+function drawPaper(cam) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(60,38,18,.35)'; ctx.shadowBlur = 36; ctx.shadowOffsetY = 12;
+  ctx.fillStyle = COLOR.paper; ctx.fillRect(0, 0, 1200, 4600);
+  ctx.restore();
+  const hx = W / 2 / cam.z, hy = H / 2 / cam.z;
+  const x0 = Math.max(0, cam.x - hx), x1 = Math.min(1200, cam.x + hx), y0 = Math.max(0, cam.y - hy), y1 = Math.min(4600, cam.y + hy);
+  for (const bold of [false, true]) {
+    const step = bold ? 200 : 40;
+    ctx.beginPath();
+    for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) if (bold || x % 200) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+    for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) if (bold || y % 200) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+    ctx.strokeStyle = bold ? COLOR.gridBold : COLOR.grid; ctx.lineWidth = bold ? 2 : 1.3; ctx.stroke();
+  }
+  // 연습장 스프링 구멍
+  if (y0 < 60) for (let x = 60; x < 1200; x += 60) { ctx.beginPath(); ctx.ellipse(x, 30, 9, 9, 0, 0, Math.PI * 2); ctx.fillStyle = COLOR.desk; ctx.fill(); }
+}
+
+function drawTitle(t) {
+  const T = LAYOUT.title, S = LAYOUT.subtitle;
+  ink(G.bez([190, 380], [420, 372], [650, 384], [890, 376]), { p: E.io(prog(t, .8, 1.05)), id: 11 });
+  write(TEXT.title, T.x, T.y, T.size, T.t, t);
+  write(TEXT.subtitle, S.x, S.y, S.size, S.t, t);
+}
+function drawTrails(t) {
+  const d = { dash: 16, w: 3, jit: 1.4 };
+  ink(P1.pts, { ...d, p: E.io(prog(t, 1.9, 2.7)), id: 21 });
+  ink(PB.pts, { ...d, p: E.io(prog(t, 4.2, 4.6)), id: 22 });
+  ink(P2.pts, { ...d, p: E.io(prog(t, 6.0, 6.4)), id: 23 });
+  ink(P3.pts, { ...d, p: E.io(prog(t, 8.2, 8.5)), id: 24 });
+  ink(P4.pts, { ...d, p: E.io(prog(t, 11.95, 12.55)), id: 25 });
+  // 18.35~19.35 갈색 덧칠 (전체 경로를 한 번에 이어서)
+  const total = TRAILS.reduce((a, p) => a + p.len, 0);
+  let L = E.io(prog(t, ...TL.retrace)) * total;
+  TRAILS.forEach((p, k) => {
+    const f = clamp(L / p.len); L -= p.len;
+    ink(p.pts, { p: f, color: COLOR.retrace, w: 5, jit: 1.6, id: 30 + k });
+  });
+}
+
+function drawBowl(t) {
+  const a = bowlAngle(t), T = { x: BOWL.px, y: BOWL.py, r: a };
+  const q = (s, e) => E.io(prog(t, s, e));
+  const rim = xf(BOWL.rim, T), body = xf(BOWL.body, T);
+  if (q(2.05, 2.35) > .5) fillPts(rim, '#E2D8C8', clamp(q(2.05, 2.35) * 2 - 1));
+  ink(rim, { p: q(2.05, 2.35), id: 41 });
+  for (let i = 0; i < 10; i++) { const st = beanState(i, t); if (st && t < 4.2 + ORDER[i] * .035) bean(st, 60 + i); }
+  if (q(2.25, 2.65) > .5) fillPts(body, COLOR.fill, clamp(q(2.25, 2.65) * 2 - 1));
+  ink(body, { p: q(2.25, 2.65), id: 42 });
+  ink(xf(BOWL.foot, T), { p: q(2.6, 2.8), id: 43 });
+  BOWL.hatch.forEach((h, k) => ink(xf(h, T), { p: q(2.7 + k * .05, 2.9 + k * .05), id: 44 + k, w: 3, alpha: .55, over: false }));
+  // 김
+  const fade = 1 - prog(t, 4.0, 4.2);
+  if (t > TL.steam && fade > 0) for (let j = 0; j < 3; j++) {
+    const pts = []; for (let k = 0; k <= 12; k++) pts.push([405 + 45 * j + Math.sin(k * .6 - t * 5 + j * 2) * 9, 955 - k * 9 - j * 6]);
+    ink(dense(pts), { p: E.io(prog(t, 3.3 + j * .12, 3.8 + j * .12)), id: 50 + j, w: 3, alpha: .7 * fade, over: false });
+  }
+}
+function drawFlyingBeans(t) {
+  for (let i = 0; i < 10; i++) if (t >= 4.2 + ORDER[i] * .035) bean(beanState(i, t), 60 + i);
+}
+function drawGrinder(t) {
+  const env = prog(t, 5.75, 5.9) * (1 - prog(t, 7.5, 7.65));
+  const T = { x: Math.sin(t * 83) * 2.4 * env, y: Math.cos(t * 61) * 1.6 * env };
+  const q = (s, e) => E.io(prog(t, s, e));
+  const f = (s, e) => clamp(q(s, e) * 2 - 1);
+  fillPts(xf(GR.hopFill, T), COLOR.fill, f(4.45, 4.75));
+  fillPts(xf(GR.bodyFill, T), COLOR.fill, f(4.65, 4.95));
+  ink(xf(GR.hopRim, T), { p: q(4.45, 4.65), id: 101 });
+  ink(xf(GR.hopL, T), { p: q(4.55, 4.72), id: 102 });
+  ink(xf(GR.hopR, T), { p: q(4.58, 4.75), id: 103 });
+  ink(xf(GR.body, T), { p: q(4.65, 4.95), id: 104 });
+  ink(xf(GR.drawer, T), { p: q(4.9, 5.05), id: 105 });
+  ink(xf(GR.knob, T), { p: q(5.0, 5.1), id: 106 });
+  ink(xf(GR.spout, T), { p: q(5.0, 5.15), id: 107 });
+  GR.hatch.forEach((h, k) => ink(xf(h, T), { p: q(5.2 + k * .04, 5.35 + k * .04), id: 108 + k, w: 3, alpha: .5, over: false }));
+  ink(xf(GR.shaft, T), { p: q(5.1, 5.2), id: 113 });
+  const a = -Math.PI / 2 + 2.3 * Math.PI * 2 * E.io(prog(t, ...TL.crank));
+  const cx = 660 + T.x, cy = 1752 + T.y, ex = cx + Math.cos(a) * 100, ey = cy + Math.sin(a) * 24;
+  ink(G.line([cx, cy], [ex, ey]), { p: q(5.15, 5.35), id: 114 });
+  ink(G.line([ex, ey], [ex, ey - 28]), { p: q(5.3, 5.4), id: 115 });
+  if (q(5.35, 5.45) > .5) fillPts(G.ell(ex, ey - 38, 10, 12), COLOR.fill);
+  ink(G.ell(ex, ey - 38, 10, 12), { p: q(5.35, 5.45), id: 116 });
+  // 회전 표시
+  if (env > 0) ink(G.ell(cx, cy, 128, 34, a - 1.1, .9), { id: 117, w: 3, alpha: .5 * env, over: false });
+}
+function drawPortafilter(t) {
+  const P = pfPose(t), T = { x: P.x, y: P.y, r: P.r };
+  const q = (s, e) => E.io(prog(t, s, e));
+  if (t < 5.3) return;
+  fillPts(xf(PF.hFill, T), COLOR.fill, clamp(q(5.3, 5.5) * 2 - 1));
+  fillPts(xf(PF.basket, T), COLOR.fill, clamp(q(5.45, 5.7) * 2 - 1));
+  const h = groundsHeight(t);
+  if (h > .5) {
+    const m = xf(G.bez([-54, 0], [-28, -h * 1.35], [28, -h * 1.35], [54, 0]), T);
+    fillPts(m, COLOR.ground); ink(m, { id: 131, w: 3, jit: 1.2 });
+    for (let k = 0; k < 7; k++) {
+      const [[dx, dy]] = xf([[-36 + k * 12, -h * .45 * (1 - Math.abs(k - 3) / 4)]], T);
+      ctx.fillStyle = COLOR.beanCrease; ctx.beginPath(); ctx.arc(dx, dy, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ink(xf(PF.hA, T), { p: q(5.3, 5.45), id: 121 });
+  ink(xf(PF.hB, T), { p: q(5.35, 5.5), id: 122 });
+  ink(xf(PF.cap, T), { p: q(5.45, 5.55), id: 123 });
+  ink(xf(PF.basket, T), { p: q(5.5, 5.72), id: 124 });
+  ink(xf(PF.rim, T), { p: q(5.65, 5.8), id: 125 });
+  ink(xf(PF.block, T), { p: q(5.75, 5.88), id: 126 });
+  ink(xf(PF.s1, T), { p: q(5.85, 5.93), id: 127 });
+  ink(xf(PF.s2, T), { p: q(5.9, 6.0), id: 128 });
+}
+function drawGrains(t) {
+  for (let i = 0; i < GRAIN_N; i++) {
+    const s = (t - grainT(i)) / GRAIN_FL;
+    if (s < 0 || s >= 1) continue;
+    const p = P2.at(E.inQ(s)), off = (rnd(i, 41) - .5) * 18 * (1 - s * .6);
+    const x = p.x - Math.sin(p.a) * off + (rnd(VAR, i) - .5) * 1.4, y = p.y + Math.cos(p.a) * off;
+    ctx.fillStyle = COLOR.ground; ctx.beginPath(); ctx.arc(x, y, 2.6 + rnd(i, 42) * 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+}
+function drawMachine(t) {
+  const q = (s, e) => E.io(prog(t, s, e));
+  if (t < 8.25) return;
+  fillPts(MC.bodyFill, COLOR.fill, clamp(q(8.25, 8.55) * 2 - 1));
+  fillPts(MC.trayFill, COLOR.fill, clamp(q(8.8, 9.0) * 2 - 1));
+  ink(MC.body, { p: q(8.25, 8.55), id: 141 });
+  ink(MC.top, { p: q(8.45, 8.6), id: 142 });
+  ink(MC.gauge, { p: q(8.5, 8.68), id: 143 });
+  ink(MC.needle, { p: q(8.66, 8.72), id: 144 });
+  ink(MC.b1, { p: q(8.6, 8.7), id: 145 });
+  ink(MC.b2, { p: q(8.66, 8.76), id: 146 });
+  ink(MC.group, { p: q(8.65, 8.85), id: 147 });
+  ink(MC.wand, { p: q(8.75, 8.95), id: 148 });
+  ink(MC.tray, { p: q(8.8, 9.0), id: 149 });
+  MC.hatch.forEach((h, k) => ink(h, { p: q(8.85 + k * .03, 8.98 + k * .03), id: 150 + k, w: 3, alpha: .5, over: false }));
+}
+function drawTamper(t) {
+  const P = tamperPose(t); if (!P) return;
+  const T = { x: P.x, y: P.y, wy: P.wy };
+  const p = E.io(prog(t, 8.72, 8.95));
+  fillPts(xf(TP.diskFill, T), COLOR.fill, p);
+  ink(xf(TP.disk, T), { p, id: 161 });
+  ink(xf(TP.s1, T), { p, id: 162 });
+  ink(xf(TP.s2, T), { p, id: 163 });
+  if (p > .5) fillPts(xf(TP.knob, T), COLOR.fill);
+  ink(xf(TP.knob, T), { p, id: 164 });
+}
+function drawClick(t) {
+  const a = prog(t, 9.82, 9.84) * (1 - prog(t, 9.9, 10.1));
+  if (a <= 0) return;
+  [-.6, 0, .6].forEach((ang, k) => ink(G.line([518 + Math.cos(ang) * 10, 2800 + Math.sin(ang) * 10], [518 + Math.cos(ang) * 28, 2800 + Math.sin(ang) * 28]),
+    { id: 170 + k, w: 3.5, alpha: a, over: false }));
+  [-.6, 0, .6].forEach((ang, k) => ink(G.line([382 - Math.cos(ang) * 10, 2800 + Math.sin(ang) * 10], [382 - Math.cos(ang) * 28, 2800 + Math.sin(ang) * 28]),
+    { id: 173 + k, w: 3.5, alpha: a, over: false }));
+}
+function drawShot(t) {
+  if (t < 9.8) return;
+  const P = shotPose(t), T = { x: P.x, y: P.y, r: P.r };
+  const q = (s, e) => E.io(prog(t, s, e));
+  fillPts(xf(SG.fill, T), COLOR.fill, .75 * clamp(q(9.8, 10.1) * 2 - 1));
+  const L = shotLevel(t);
+  if (L > .01 && Math.abs(P.r) < .6) {
+    const yS = 38 - 72 * L, hS = 31 + 7 * (40 - yS) / 80;
+    fillPts(xf([[-hS, yS], [hS, yS], [31, 38], [-31, 38]], T), COLOR.beanCrease);
+    const cr = 7 * prog(t, 10.5, 11.4);
+    if (cr > .3) { const h2 = 31 + 7 * (40 - yS - cr) / 80; fillPts(xf([[-hS, yS], [hS, yS], [h2, yS + cr], [-h2, yS + cr]], T), COLOR.crema); }
+  }
+  ink(xf(SG.left, T), { p: q(9.8, 9.9), id: 181 });
+  ink(xf(SG.bottom, T), { p: q(9.88, 9.95), id: 182 });
+  ink(xf(SG.right, T), { p: q(9.93, 10.03), id: 183 });
+  ink(xf(SG.rim, T), { p: q(10.0, 10.12), id: 184 });
+  ink(xf(SG.base, T), { p: q(10.05, 10.15), id: 185 });
+}
+function drawEspresso(t) {
+  const surf = 2955 + 38 - 72 * shotLevel(t);
+  const head = E.inQ(prog(t, 10.15, 10.32)), tail = E.inQ(prog(t, 11.45, 11.6));
+  if (head > 0 && tail < 1) [[443, 447], [457, 453]].forEach(([x0, x1], k) => {
+    const pts = []; for (let j = 0; j <= 10; j++) { const s = j / 10; pts.push([lerp(x0, x1, s) + Math.sin(s * 9 + t * 30 + k) * 1.2, lerp(2872, surf, s)]); }
+    ink(pts, { p0: tail, p: head, color: COLOR.beanCrease, w: 5, jit: .8, id: 191 + k });
+  });
+  // 끝나고 방울 똑똑
+  [11.62, 11.76, 11.9].forEach((t0, k) => {
+    const u = prog(t, t0, t0 + .14);
+    if (u > 0 && u < 1) { const x = k % 2 ? 457 : 443, y = lerp(2872, surf, E.inQ(u));
+      const d = xf(DROP, { x, y, s: .7 }); fillPts(d, COLOR.beanCrease); }
+    const r = prog(t, t0 + .14, t0 + .3);
+    if (r > 0 && r < 1) ink(G.ell(k % 2 ? 457 : 443, surf + 1, 6 + 16 * r, 2 + 3 * r, 0, Math.PI * 2), { id: 195 + k, w: 2, color: COLOR.crema, alpha: 1 - r, over: false });
+  });
+}
+
+function drawBigGlass(t) {
+  const q = (s, e) => E.io(prog(t, s, e));
+  fillPts(BG.inner, COLOR.ice, .22 * clamp(q(12.3, 12.95) * 2 - 1));
+  // 찬물 + 커피
+  const wl = waterLevel(t);
+  if (wl !== null) {
+    const amp = waveAmp(t), surf = [];
+    for (let x = 640 - hw(wl) + 3; x <= 640 + hw(wl) - 3; x += 12) surf.push([x, wl + Math.sin(x * .045 + t * 8) * amp * Math.sin((x - 515) / 250 * Math.PI)]);
+    const poly = [...surf, [742, 3967], [538, 3967]];
+    fillPts(poly, COLOR.water);
+    const cf = E.io(prog(t, 15.78, 16.95));
+    if (cf > 0) {
+      const yC = lerp(3968, wl - 10, cf), g = ctx.createLinearGradient(0, yC - 45, 0, yC + 20);
+      g.addColorStop(0, `rgba(${COLOR.coffee},0)`); g.addColorStop(1, `rgba(${COLOR.coffee},0.9)`);
+      fillPts(poly, g);
+    }
+    ink(dense(surf), { id: 201, color: COLOR.iceLine, w: 3, jit: 1, over: false, alpha: .8 });
+    // 소용돌이
+    const sa = prog(t, 15.95, 16.2) * (1 - prog(t, 16.9, 17.4));
+    if (sa > 0) for (let j = 0; j < 2; j++) ink(G.ell(640, 3880 - j * 55, 78 - j * 18, 12, t * 5 + j * 2, 4.4), { id: 205 + j, color: COLOR.ice, w: 3, alpha: .85 * sa, over: false });
+  }
+  // 얼음
+  TL.ice.forEach((t0, k) => {
+    const st = iceState(ICE[k], t0, t); if (!st) return;
+    const T = { x: st.x, y: st.y, r: st.r, wx: st.wx || 1, wy: st.wy || 1 };
+    const o = xf(CUBE.out, T);
+    fillPts(o, COLOR.ice, .9);
+    ink(o, { id: 211 + k * 3, color: COLOR.iceLine, jit: 1.5 });
+    ink(xf(CUBE.f1, T), { id: 212 + k * 3, color: '#ffffff', w: 3.5, over: false, alpha: .9 });
+    ink(xf(CUBE.f2, T), { id: 213 + k * 3, color: COLOR.iceLine, w: 2.5, over: false, alpha: .7 });
+    // 물방울 튐
+    const v = t - t0 - .22;
+    if (v > 0 && v < .4) for (let d = 0; d < 7; d++) {
+      const ang = -Math.PI / 2 + (d - 3) * .38, sp = 190 + rnd(k * 7 + d, 51) * 130;
+      const x = ICE[k].x + Math.cos(ang) * sp * v, y = ICE[k].y - 30 + Math.sin(ang) * sp * v + 700 * v * v;
+      const dr = xf(DROP, { x, y, s: .8 * (1 - v / .4) + .2 });
+      fillPts(dr, COLOR.ice); ink(dr, { id: 230 + d, color: COLOR.iceLine, w: 2, jit: .6, over: false });
+    }
+  });
+  // 찬물 줄기
+  if (t > TL.water[0] && t < TL.water[1] + .02) {
+    const bottom = wl ?? 3968, yb = lerp(3470, bottom, E.inQ(prog(t, 14.2, 14.33))), yt = lerp(3470, bottom, E.inQ(prog(t, 15.0, 15.15)));
+    if (yb - yt > 2) {
+      const l = [], r = [];
+      for (let j = 0; j <= 8; j++) { const y = lerp(yt, yb, j / 8), wv = Math.sin(y * .05 + t * 20) * 1.5; l.push([649 + wv, y]); r.push([661 + wv, y]); }
+      fillPts([...l, ...r.reverse()], COLOR.water); r.reverse();
+      ink(dense(l), { id: 241, color: COLOR.iceLine, w: 2.5, jit: 1, over: false });
+      ink(dense(r), { id: 242, color: COLOR.iceLine, w: 2.5, jit: 1, over: false });
+    }
+  }
+  // 빨대
+  if (t >= TL.straw[0]) {
+    const s = prog(t, 17.25, 17.42), dt = t - 17.42;
+    const r = .2 + (dt > 0 ? .14 * Math.sin(dt * 30) * Math.exp(-dt * 7) : 0);
+    const T = { x: 700, y: 3945 - 560 * (1 - E.inQ(s)), r };
+    fillPts(xf(ST.fill, T), COLOR.ice, .6);
+    ST.stripes.forEach((p, k) => ink(xf(p, T), { id: 250 + k, color: COLOR.iceLine, w: 3, jit: 1, over: false }));
+    ink(xf(ST.L, T), { id: 261 }); ink(xf(ST.R, T), { id: 262 }); ink(xf(ST.top, T), { id: 263, w: 3 });
+  }
+  // 유리잔 윤곽
+  ink(BG.left, { p: q(12.3, 12.5), id: 271 });
+  ink(BG.bottom, { p: q(12.45, 12.6), id: 272 });
+  ink(BG.right, { p: q(12.55, 12.75), id: 273 });
+  ink(BG.rim, { p: q(12.7, 12.95), id: 274 });
+  ink(BG.base, { p: q(12.8, 12.95), id: 275 });
+  ink(BG.hl1, { p: q(12.85, 12.95), id: 276, color: '#ffffff', w: 5, over: false, alpha: .8 });
+  ink(BG.hl2, { p: q(12.88, 12.95), id: 277, color: '#ffffff', w: 4, over: false, alpha: .8 });
+  // 커피 붓는 줄기
+  const head = E.inQ(prog(t, 15.72, 15.86)), tail = prog(t, 16.4, 16.55);
+  if (head > 0 && tail < 1) {
+    const P = shotPose(t), [[lx, ly]] = xf([[38, -40]], { x: P.x, y: P.y, r: P.r });
+    const sy = (wl ?? 3968) - 2;
+    const c = G.bez([lx, ly], [lx + 40, ly], [612, lerp(ly, sy, .4)], [612, sy]);
+    ink(c, { p0: tail, p: head, color: `rgb(${COLOR.coffee})`, w: 8, jit: 1, id: 281 });
+  }
+  // 물방울 맺힘
+  DROPLETS.forEach((d, k) => {
+    const u = prog(t, 17.55 + k * .042, 17.55 + k * .042 + .15); if (u <= 0) return;
+    const T = { x: d.x, y: d.y, s: d.s * E.outBack(u) };
+    const o = xf(DROP, T);
+    fillPts(o, 'rgba(255,255,255,0.75)'); ink(o, { id: 290 + k, color: COLOR.iceLine, w: 2, jit: .6, over: false });
+  });
+}
+function drawSparkles(t) {
+  for (let k = 0; k < 10; k++) {
+    const t0 = 17.35 + k * .03, p = E.outQ(prog(t, t0, t0 + .14)); if (p <= 0) continue;
+    const a = k * Math.PI * 2 / 10 + .3, ca = Math.cos(a), sa = Math.sin(a);
+    const x0 = 640 + ca * 180, y0 = 3810 + sa * 235, len = 40 * (.75 + .25 * Math.sin(t * 9 + k));
+    ink(G.line([x0, y0], [x0 + ca * len, y0 + sa * len]), { p, id: 310 + k, w: 4 });
+  }
+}
+
+function labelGeom(i) {
+  const L = LAYOUT.labels[i]; setFont(L.size);
+  const tw = ctx.measureText(TEXT.labels[i]).width, d = L.size * .82, gap = L.size * .24;
+  const left = L.x - (d + gap + tw) / 2;
+  return { L, tw, d, cx: left + d / 2, tx: left + d + gap };
+}
+function drawLabel(i, t) {
+  const { L, tw, d, cx, tx } = labelGeom(i);
+  if (t < L.t) return;
+  const tText = L.t + .25, tDone = tText + Array.from(TEXT.labels[i]).length / 10;
+  const hp = E.outQ(prog(t, tDone, tDone + .35));
+  if (hp > 0) {
+    ctx.globalCompositeOperation = 'multiply';
+    ink(G.line([tx - 6, L.y + L.size * .34], [tx + tw + 8, L.y + L.size * .3]), { p: hp, color: COLOR.highlight, w: L.size * .3, jit: 1.5, over: false, id: 400 + i });
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ink(G.ell(cx, L.y, d / 2, d / 2 * .95), { p: E.io(prog(t, L.t, L.t + .3)), id: 410 + i, w: 3.5 });
+  write(String(i + 1), cx, L.y + 2, L.size * .62, L.t + .12, t);
+  write(TEXT.labels[i], 0, L.y, L.size, tText, t, { left: tx });
+}
+function drawChecks(t) {
+  for (let i = 0; i < 4; i++) {
+    const t0 = TL.checks[0] + i * .125, p = E.outQ(prog(t, t0, t0 + .14)); if (p <= 0) continue;
+    const { L, tw, tx } = labelGeom(i), k = L.size / 74, x = tx + tw + 30 * k, y = L.y;
+    ink(G.poly([[x, y], [x + 14 * k, y + 18 * k], [x + 48 * k, y - 28 * k]]), { p, color: COLOR.check, w: 6, id: 420 + i });
+  }
+}
+function drawEnding(t) {
+  const T = LAYOUT.endTitle, S = LAYOUT.signature;
+  const r = write(TEXT.endTitle, T.x, T.y, T.size, T.t, t);
+  const hp = E.outQ(prog(t, r.done + .1, r.done + .5));
+  if (hp > 0) {
+    ctx.globalCompositeOperation = 'multiply';
+    ink(G.line([r.left - 6, T.y + T.size * .34], [r.left + r.width + 6, T.y + T.size * .3]), { p: hp, color: COLOR.highlight, w: T.size * .28, jit: 1.5, over: false, id: 430 });
+    ctx.globalCompositeOperation = 'source-over';
+    // 다시 그려 글자가 형광펜 위로 오게
+    write(TEXT.endTitle, T.x, T.y, T.size, T.t, t);
+  }
+  write(TEXT.signature, S.x, S.y, S.size, S.t, t, { color: '#5b4a3e' });
+}
+
+function drawScene(t) {
+  drawTitle(t);
+  drawTrails(t);
+  drawBowl(t);
+  drawMachine(t);
+  drawFlyingBeans(t);
+  drawGrinder(t);
+  drawPortafilter(t);
+  drawGrains(t);
+  drawTamper(t);
+  drawClick(t);
+  drawShot(t);
+  drawEspresso(t);
+  drawBigGlass(t);
+  drawSparkles(t);
+  for (let i = 0; i < 5; i++) drawLabel(i, t);
+  drawChecks(t);
+  drawEnding(t);
+}
+
+/* =====================================================================
+   8. render(t) — 이 함수 하나로 모든 순간이 결정됨
+   ===================================================================== */
+function render(t) {
+  t = ((t % DUR) + DUR) % DUR;
+  VAR = Math.floor(t * 12) % 3;
+  const cam = camAt(t);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = COLOR.desk; ctx.fillRect(0, 0, W, H);
+  // 뒤 낙서 층: 카메라보다 느리게
+  setCam({ x: cam.x * PARALLAX.pos, y: cam.y * PARALLAX.pos, z: Math.pow(cam.z, PARALLAX.zoom) });
+  drawDoodles();
+  setCam(cam);
+  drawPaper(cam);
+  drawScene(t);
+
+  // 합성 (휙 구간에서만 모션 블러)
+  main.setTransform(1, 0, 0, 1, 0, 0);
+  main.globalAlpha = 1;
+  main.fillStyle = COLOR.desk; main.fillRect(0, 0, W, H);
+  main.drawImage(buf, 0, 0);
+  if (cam.mode === 'whip') {
+    const pc = camAt(Math.max(0, t - 1 / 60));
+    const dx = (cam.x - pc.x) * cam.z, dy = (cam.y - pc.y) * cam.z, v = Math.hypot(dx, dy);
+    if (v > 3) {
+      const N = Math.min(10, Math.ceil(v / 5)), sp = 1.6;
+      for (let k = 1; k < N; k++) { const f = k / (N - 1); main.globalAlpha = 1 / (k + 1); main.drawImage(buf, dx * f * sp, dy * f * sp); }
+      main.globalAlpha = 1;
+    }
+  }
+  // 가장자리 갈색 비네팅
+  const g = main.createRadialGradient(W / 2, H / 2, 560, W / 2, H / 2, 1180);
+  g.addColorStop(0, 'rgba(78,48,24,0)'); g.addColorStop(1, COLOR.vignette);
+  main.fillStyle = g; main.fillRect(0, 0, W, H);
+}
+window.render = render;
+
+/* =====================================================================
+   9. 재생 컨트롤
+   ===================================================================== */
+const btn = document.getElementById('play'), seek = document.getElementById('seek'), timeEl = document.getElementById('time');
+let T = 0, playing = true, last = null, dirty = true;
+function fit() {
+  const s = Math.min((innerWidth - 16) / W, (innerHeight - 16 - 50 - 10) / H);
+  cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px';
+  document.getElementById('bar').style.width = Math.max(260, W * s) + 'px';
+}
+addEventListener('resize', fit); fit();
+function setPlaying(p) { playing = p; btn.textContent = p ? '❚❚' : '▶'; last = null; }
+btn.onclick = () => setPlaying(!playing);
+seek.oninput = () => { T = +seek.value; setPlaying(false); dirty = true; };
+addEventListener('keydown', e => { if (e.code === 'Space' && e.target !== btn) { e.preventDefault(); setPlaying(!playing); } });
+function loop(ts) {
+  if (playing) { if (last !== null) T = (T + (ts - last) / 1000) % DUR; last = ts; seek.value = T; dirty = true; }
+  if (dirty) { render(T); timeEl.textContent = T.toFixed(2) + ' / 22'; dirty = false; }
+  requestAnimationFrame(loop);
+}
+render(0);
+const start = () => { dirty = true; requestAnimationFrame(loop); };
+if (document.fonts && document.fonts.load) Promise.race([document.fonts.load('700 40px Gaegu'), new Promise(r => setTimeout(r, 2500))]).then(start, start);
+else start();
+</script>
+</body>
+</html>
